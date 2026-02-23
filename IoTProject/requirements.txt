@@ -1,0 +1,4 @@
+meshtastic==2.7.7
+flask==3.0.3
+pypubsub==4.0.3
+pyserial==3.5

@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mesh Gateway</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f0f2f5; color: #1a1a1a; }
+
+    header {
+      background: #1a73e8; color: #fff; padding: 12px 20px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    header h1 { font-size: 1.1rem; font-weight: 600; }
+    #node-bar { font-size: 0.8rem; opacity: 0.85; }
+
+    main { max-width: 800px; margin: 24px auto; padding: 0 16px; display: grid; gap: 20px; }
+
+    .card {
+      background: #fff; border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.12); padding: 16px;
+    }
+    .card h2 { font-size: 0.95rem; font-weight: 600; margin-bottom: 12px; color: #444; }
+
+    #message-log {
+      height: 320px; overflow-y: auto;
+      border: 1px solid #e0e0e0; border-radius: 6px;
+      padding: 10px; display: flex; flex-direction: column; gap: 8px;
+    }
+    .msg { max-width: 75%; padding: 8px 12px; border-radius: 14px; font-size: 0.88rem; line-height: 1.4; }
+    .msg.rx { background: #e9ecef; align-self: flex-start; }
+    .msg.tx { background: #1a73e8; color: #fff; align-self: flex-end; }
+    .msg .meta { font-size: 0.72rem; opacity: 0.65; margin-top: 4px; }
+
+    form { display: flex; flex-direction: column; gap: 10px; }
+    input[type=text], select {
+      padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 1rem;
+      width: 100%; min-height: 44px;
+    }
+    button {
+      padding: 8px 18px; background: #1a73e8; color: #fff;
+      border: none; border-radius: 6px; font-size: 0.9rem; cursor: pointer;
+    }
+    button:disabled { background: #90b8f0; cursor: not-allowed; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row input[type=text] { flex: 1; }
+    .row select { width: auto; }
+
+    progress { width: 100%; height: 14px; border-radius: 6px; appearance: none; margin-top: 6px; }
+    progress::-webkit-progress-bar { background: #e0e0e0; border-radius: 6px; }
+    progress::-webkit-progress-value { background: #1a73e8; border-radius: 6px; }
+
+    #transfer-status { font-size: 0.83rem; color: #555; margin-top: 4px; min-height: 1.2em; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; }
+    th { color: #666; font-weight: 600; }
+    a.dl { color: #1a73e8; text-decoration: none; }
+    a.dl:hover { text-decoration: underline; }
+
+    #node-list { font-size: 0.82rem; display: flex; flex-wrap: wrap; gap: 8px; }
+    .node-chip {
+      background: #e8f0fe; border-radius: 12px; padding: 4px 10px;
+      border: 1px solid #c5d8fb; color: #174ea6;
+    }
+    .node-chip.local {
+      background: #e6f4ea; border-color: #81c995; color: #1e6e3a;
+    }
+    .node-chip .local-tag {
+      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; opacity: 0.8; display: block;
+    }
+
+    @media (max-width: 500px) {
+      #send-form .row { flex-wrap: wrap; }
+      #send-form .row input[type=text] { flex: 1 1 100%; min-height: 44px; font-size: 1rem; }
+      #send-form .row select { flex: 1; }
+      #send-form .row button { white-space: nowrap; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Mesh Gateway</h1>
+  <div id="node-bar">
+    <div id="local-node-label" style="font-size:0.75rem;opacity:0.75;">Connecting…</div>
+    <div id="peer-count"></div>
+  </div>
+</header>
+
+<main>
+  <div class="card">
+    <h2>Known Nodes</h2>
+    <div id="node-list">—</div>
+  </div>
+
+  <div class="card">
+    <h2>Messages</h2>
+    <div id="message-log"></div>
+    <form id="send-form" style="margin-top:14px;">
+      <div class="row">
+        <input type="text" id="msg-input" placeholder="Type a message…" autocomplete="off" required />
+        <select id="dest-select">
+          <option value="^all">Broadcast</option>
+        </select>
+        <button type="submit">Send</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Send File</h2>
+    <form id="file-form">
+      <input type="file" id="file-input" required />
+      <div class="row" style="margin-top:6px;">
+        <select id="file-dest-select" style="max-width:180px;">
+          <option value="^all">Broadcast</option>
+        </select>
+        <button type="submit" id="file-send-btn">Upload &amp; Send</button>
+      </div>
+      <progress id="send-progress" value="0" max="1" style="display:none;"></progress>
+      <div id="transfer-status"></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Received Files</h2>
+    <table id="received-table">
+      <thead><tr><th>Transfer ID</th><th>Size</th><th>Chunks</th><th></th></tr></thead>
+      <tbody id="received-body"><tr><td colspan="4" style="color:#aaa;">None yet</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+  let lastMsgId = 0;
+  let activeTransferId = null;
+  let progressPoller = null;
+  let localNode = null;
+  let peerNodes = [];
+
+  function formatTime(ts) {
+    return new Date(ts * 1000).toLocaleTimeString();
+  }
+
+  function appendMessage(msg) {
+    const log = document.getElementById("message-log");
+    const div = document.createElement("div");
+    div.className = "msg " + msg.direction;
+    const meta = msg.direction === "rx"
+      ? `${msg.sender} · ${formatTime(msg.timestamp)}${msg.rssi != null ? " · RSSI " + msg.rssi : ""}`
+      : `You → ${msg.destination || "^all"} · ${formatTime(msg.timestamp)}`;
+    div.innerHTML = `<div>${escHtml(msg.text)}</div><div class="meta">${meta}</div>`;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  async function pollMessages() {
+    try {
+      const r = await fetch(`/api/messages?since_id=${lastMsgId}`);
+      if (!r.ok) return;
+      const msgs = await r.json();
+      msgs.forEach(m => { appendMessage(m); lastMsgId = Math.max(lastMsgId, m.id); });
+    } catch(_) {}
+  }
+
+  function renderNodeList() {
+    const list = document.getElementById("node-list");
+    const chips = [];
+    if (localNode) {
+      chips.push(
+        `<span class="node-chip local">` +
+        `<span class="local-tag">This node</span>` +
+        `${escHtml(localNode.short_name || localNode.id)}<br><small>${escHtml(localNode.long_name || "")}</small>` +
+        `</span>`
+      );
+    }
+    peerNodes.forEach(n => {
+      chips.push(
+        `<span class="node-chip">${escHtml(n.short_name || n.id)}<br><small>${escHtml(n.long_name || "")}</small></span>`
+      );
+    });
+    list.innerHTML = chips.length ? chips.join("") : "—";
+  }
+
+  async function loadLocalNode() {
+    try {
+      const r = await fetch("/api/local-node");
+      if (!r.ok) return;
+      const node = await r.json();
+      const label = document.getElementById("local-node-label");
+      if (node) {
+        localNode = node;
+        label.textContent = `This node: ${node.short_name || node.id}${node.long_name ? " — " + node.long_name : ""}`;
+      } else {
+        localNode = null;
+        label.textContent = "No ESP32 connected";
+      }
+      renderNodeList();
+    } catch(_) {}
+  }
+
+  async function loadNodes() {
+    try {
+      const r = await fetch("/api/nodes");
+      if (!r.ok) return;
+      const nodes = await r.json();
+      peerNodes = nodes;
+      const peerCount = document.getElementById("peer-count");
+      const destSelects = [document.getElementById("dest-select"), document.getElementById("file-dest-select")];
+
+      peerCount.textContent = nodes.length ? `${nodes.length} peer(s) online` : "No peers found";
+      renderNodeList();
+
+      destSelects.forEach(sel => {
+        const existing = Array.from(sel.options).map(o => o.value);
+        nodes.forEach(n => {
+          if (!existing.includes(n.id)) {
+            const opt = document.createElement("option");
+            opt.value = n.id;
+            opt.textContent = (n.short_name || n.id);
+            sel.appendChild(opt);
+          }
+        });
+      });
+    } catch(_) {}
+  }
+
+  document.getElementById("send-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    const input = document.getElementById("msg-input");
+    const text = input.value.trim();
+    const destination = document.getElementById("dest-select").value;
+    if (!text) return;
+    input.value = "";
+    try {
+      const r = await fetch("/api/messages", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({text, destination})
+      });
+      if (!r.ok) { alert("Send failed"); return; }
+      const msg = await r.json();
+      appendMessage(msg);
+      lastMsgId = Math.max(lastMsgId, msg.id);
+    } catch(_) { alert("Network error"); }
+  });
+
+  document.getElementById("file-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    const fileInput = document.getElementById("file-input");
+    const file = fileInput.files[0];
+    if (!file) return;
+    const destination = document.getElementById("file-dest-select").value;
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("destination", destination);
+
+    document.getElementById("file-send-btn").disabled = true;
+    document.getElementById("transfer-status").textContent = "Uploading…";
+    document.getElementById("send-progress").style.display = "block";
+    document.getElementById("send-progress").value = 0;
+
+    try {
+      const r = await fetch("/api/transfer/send", {method: "POST", body: form});
+      if (!r.ok) {
+        const msg = await r.text();
+        document.getElementById("transfer-status").textContent = "Error: " + msg;
+        document.getElementById("file-send-btn").disabled = false;
+        return;
+      }
+      const {transfer_id} = await r.json();
+      activeTransferId = transfer_id;
+      document.getElementById("transfer-status").textContent = `Transfer #${transfer_id} started…`;
+      startProgressPolling(transfer_id);
+    } catch(_) {
+      document.getElementById("transfer-status").textContent = "Network error";
+      document.getElementById("file-send-btn").disabled = false;
+    }
+  });
+
+  function startProgressPolling(transfer_id) {
+    if (progressPoller) clearInterval(progressPoller);
+    progressPoller = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/transfer/progress/${transfer_id}`);
+        if (!r.ok) return;
+        const p = await r.json();
+        const sent = p.sent_chunks || p.received_chunks || 0;
+        const total = p.total_chunks || 1;
+        document.getElementById("send-progress").value = sent / total;
+        document.getElementById("transfer-status").textContent =
+          `${p.direction === "tx" ? "Sending" : "Receiving"}: chunk ${sent}/${total} — ${p.status}`;
+        if (p.status === "done" || p.status === "error") {
+          clearInterval(progressPoller);
+          progressPoller = null;
+          document.getElementById("file-send-btn").disabled = false;
+          if (p.status === "done") refreshReceivedList();
+        }
+      } catch(_) {}
+    }, 1000);
+  }
+
+  async function refreshReceivedList() {
+    try {
+      const r = await fetch("/api/transfer/received");
+      if (!r.ok) return;
+      const files = await r.json();
+      const tbody = document.getElementById("received-body");
+      if (!files.length) {
+        tbody.innerHTML = '<tr><td colspan="4" style="color:#aaa;">None yet</td></tr>';
+        return;
+      }
+      tbody.innerHTML = files.map(f =>
+        `<tr>
+          <td>${f.transfer_id}</td>
+          <td>${(f.size / 1024).toFixed(1)} KB</td>
+          <td>${f.total_chunks}</td>
+          <td><a class="dl" href="/api/transfer/download/${f.transfer_id}">Download</a></td>
+        </tr>`
+      ).join("");
+    } catch(_) {}
+  }
+
+  setInterval(pollMessages, 2000);
+  setInterval(loadNodes, 15000);
+  setInterval(loadLocalNode, 30000);
+  setInterval(refreshReceivedList, 10000);
+
+  pollMessages();
+  loadLocalNode();
+  loadNodes();
+  refreshReceivedList();
+</script>
+</body>
+</html>

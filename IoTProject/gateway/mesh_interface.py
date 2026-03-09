@@ -1,4 +1,6 @@
 import logging
+import threading
+import time
 from pubsub import pub
 import meshtastic.serial_interface
 
@@ -6,20 +8,36 @@ logger = logging.getLogger(__name__)
 
 _interface = None
 _receive_callbacks = []
+_transport = "serial"
+_device = None
 
 MAX_CHUNK_PAYLOAD = 200
+_BLE_RECONNECT_INTERVAL = 5
 
 
-def connect(dev_path=None):  # opens a serial connection to the esp32 and subscribes to incoming packets
-    global _interface
-    _interface = meshtastic.serial_interface.SerialInterface(dev_path)
+def connect(device=None, transport="serial"):  # opens a serial or BLE connection to the LoRa32 and subscribes to incoming packets
+    global _interface, _transport, _device
+    _transport = transport
+    _device = device
+    _interface = _create_interface(device, transport)
     pub.subscribe(_on_receive, "meshtastic.receive")
-    logger.info("Connected to mesh node on %s", dev_path or "auto-detected port")
+    logger.info("Connected via %s on %s", transport, device or "auto-detected")
 
 
-def disconnect():  # closes the serial connection and clears the interface
+def _create_interface(device, transport):  # instantiates either a SerialInterface or BLEInterface
+    if transport == "ble":
+        from meshtastic.ble_interface import BLEInterface
+        return BLEInterface(device)
+    return meshtastic.serial_interface.SerialInterface(device)
+
+
+def disconnect():  # closes the connection and clears the interface
     global _interface
     if _interface:
+        try:
+            pub.unsubscribe(_on_receive, "meshtastic.receive")
+        except Exception:
+            pass
         _interface.close()
         _interface = None
         logger.info("Disconnected from mesh node")
@@ -105,3 +123,40 @@ def _on_receive(packet, interface):  # dispatches every incoming packet to all r
             cb(packet)
         except Exception:
             logger.exception("Error in receive callback")
+
+
+def _ble_reconnect_loop():  # watchdog thread: monitors BLE connection and triggers a reconnect if dropped
+    while True:
+        time.sleep(_BLE_RECONNECT_INTERVAL)
+        if _transport != "ble" or _interface is None:
+            continue
+        try:
+            if not getattr(_interface, "isConnected", True):
+                logger.warning("BLE connection lost — reconnecting to %s", _device)
+                _do_ble_reconnect()
+        except Exception:
+            logger.exception("Error in BLE watchdog")
+
+
+def _do_ble_reconnect():  # tears down the dropped BLE interface and opens a fresh one
+    global _interface
+    try:
+        pub.unsubscribe(_on_receive, "meshtastic.receive")
+    except Exception:
+        pass
+    try:
+        if _interface:
+            _interface.close()
+    except Exception:
+        pass
+    _interface = None
+    try:
+        _interface = _create_interface(_device, "ble")
+        pub.subscribe(_on_receive, "meshtastic.receive")
+        logger.info("BLE reconnected to %s", _device)
+    except Exception:
+        logger.exception("BLE reconnect failed — will retry in %ds", _BLE_RECONNECT_INTERVAL)
+
+
+_ble_watchdog = threading.Thread(target=_ble_reconnect_loop, daemon=True)
+_ble_watchdog.start()

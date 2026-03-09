@@ -1,9 +1,11 @@
+import argparse
 import logging
 import sys
 
 from gateway.message_store import MessageStore
 from gateway.file_transfer import FileTransfer
 from gateway import mesh_interface
+from gateway import bt_server
 from gateway.web_server import create_app
 
 logging.basicConfig(
@@ -21,6 +23,26 @@ PORT = 5000
 
 
 def main():  # wires up all components and starts the flask web server
+    parser = argparse.ArgumentParser(description="IoT Mesh Gateway")
+    parser.add_argument(
+        "--transport",
+        choices=["serial", "ble"],
+        default="serial",
+        help="Transport to reach the LoRa32: serial (USB) or ble (Bluetooth)",
+    )
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Serial port path (e.g. /dev/ttyUSB0) or BLE MAC address / device name",
+    )
+    parser.add_argument(
+        "--bluetooth",
+        action="store_true",
+        default=False,
+        help="Enable BLE NUS (Nordic UART Service) peripheral so a phone/M5Stick can send/receive mesh messages over Bluetooth",
+    )
+    args = parser.parse_args()
+
     store = MessageStore()
     ft = FileTransfer(send_chunk_fn=mesh_interface.send_chunk)
 
@@ -35,6 +57,7 @@ def main():  # wires up all components and starts the flask web server
             rx_snr = packet.get("rxSnr")
             store.add(sender, text, rssi=rx_rssi, snr=rx_snr)
             logger.info("Message from %s: %s", sender, text)
+            bt_server.send(f"[{sender}] {text}")
 
         elif port_num == "PRIVATE_APP" or port_num == PRIVATE_APP:
             payload = decoded.get("payload", b"")
@@ -49,11 +72,16 @@ def main():  # wires up all components and starts the flask web server
 
     mesh_interface.register_receive_callback(on_packet)
 
+    if args.bluetooth:
+        bt_server.start(on_message_fn=lambda text: mesh_interface.send_text(text))
+
     try:
-        mesh_interface.connect()
+        mesh_interface.connect(device=args.device, transport=args.transport)
     except Exception:
         logger.warning(
-            "Could not connect to mesh node at %s — running without hardware", DEV_PATH
+            "Could not connect to mesh node (%s, %s) — running without hardware",
+            args.transport,
+            args.device or "auto-detected",
         )
 
     app = create_app(store, ft)

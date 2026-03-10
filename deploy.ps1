@@ -42,15 +42,22 @@ Write-Host "==> Applying bundle on Pi ..." -ForegroundColor Cyan
 $ApplyCmd = @"
 set -e
 cd $RemoteDir
-# First-time setup: initialise git from bundle if repo not yet cloned
 if [ ! -d .git ]; then
+    # First time: clone from bundle and switch to branch
     git clone /tmp/$BundleFile .
+    git checkout $Branch
 else
-    git fetch /tmp/$BundleFile '$Branch':'$Branch'
-    git checkout '$Branch'
-    git reset --hard '$Branch'
+    # Stash any local changes so they don't block the checkout
+    git stash --quiet || true
+    # Fetch branch from bundle into a local ref
+    git fetch /tmp/$BundleFile ${Branch}:${Branch}
+    # Switch to the branch (handles case where Pi was on a different branch)
+    git checkout $Branch
+    # Hard reset to the fetched tip — discards any old local commits
+    git reset --hard $Branch
 fi
 rm -f /tmp/$BundleFile
+echo "Pi is now on branch: \$(git rev-parse --abbrev-ref HEAD) @ \$(git log -1 --oneline)"
 "@
 ssh $SshTarget $ApplyCmd
 if ($LASTEXITCODE -ne 0) { Write-Error "git apply on Pi failed"; exit 1 }

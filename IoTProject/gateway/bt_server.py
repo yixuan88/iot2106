@@ -53,6 +53,18 @@ def _setup_ble_agent():
 
         cmds = "power on\npairable on\n"
         subprocess.run(["bluetoothctl"], input=cmds.encode(), capture_output=True, timeout=6)
+
+        # Remove all stored bonds so stale keys never cause auth failures on reconnect
+        result = subprocess.run(["bluetoothctl", "devices", "Paired"],
+                                capture_output=True, text=True, timeout=6)
+        for line in result.stdout.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 2:
+                mac = parts[1]
+                subprocess.run(["bluetoothctl", "remove", mac],
+                                capture_output=True, timeout=6)
+                logger.info("BlueZ: removed stale bond for %s", mac)
+
         logger.info("BlueZ: adapter powered on and set to pairable")
     except FileNotFoundError:
         logger.warning("bluetoothctl not found - BT may not work")

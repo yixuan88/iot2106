@@ -168,7 +168,6 @@ async def _setup_and_serve():
 
     # Get first available BT adapter and start advertising
     adapter = await Adapter.get_first(bus)
-    await adapter.set_alias("GatewayBLE")
 
     advert = Advertisement("GatewayBLE", [NUS_SERVICE_UUID], 0x0000, 0)
     await advert.register(bus, adapter)

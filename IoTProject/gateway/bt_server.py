@@ -158,16 +158,20 @@ async def _setup_and_serve():
 
     bus = await get_message_bus()
 
-    # Register the GATT service - bluez-peripheral handles ObjectManager internally
+    # Construct the adapter directly from the known path instead of using
+    # Adapter.get_first()/get_all() which is buggy in 0.1.7 -- it iterates over
+    # ALL objects returned by GetManagedObjects and crashes on non-adapter ones.
+    adapter_intro = await bus.introspect("org.bluez", "/org/bluez/hci0")
+    adapter_proxy = bus.get_proxy_object("org.bluez", "/org/bluez/hci0", adapter_intro)
+    adapter = Adapter(adapter_proxy)
+
+    # Register the GATT service with the explicit adapter
     service = NUSService()
-    await service.register(bus)
+    await service.register(bus, adapter=adapter)
     _nus_service = service
 
     # Register a Just-Works pairing agent (no PIN required)
     await NoIoAgent().register(bus)
-
-    # Get first available BT adapter and start advertising
-    adapter = await Adapter.get_first(bus)
 
     advert = Advertisement("GatewayBLE", [NUS_SERVICE_UUID], 0x0000, 0)
     await advert.register(bus, adapter)

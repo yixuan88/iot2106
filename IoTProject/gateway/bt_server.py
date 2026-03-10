@@ -51,7 +51,9 @@ def _setup_ble_agent():
         except PermissionError:
             logger.warning("Cannot write %s - run as sudo", main_conf)
 
-        cmds = "power on\npairable on\n"
+        # Power on, allow BLE pairing (Just-Works), but stay non-discoverable
+        # over Classic BT so iPhones don't accidentally pair via BR/EDR instead of BLE.
+        cmds = "power on\npairable on\ndiscoverable off\n"
         subprocess.run(["bluetoothctl"], input=cmds.encode(), capture_output=True, timeout=6)
 
         # Remove all stored bonds so stale keys never cause auth failures on reconnect
@@ -95,12 +97,20 @@ class NUSService(Service):
     def rx_char(self, value, options):
         global _rx_buf
         _rx_buf += bytes(value).decode("utf-8", errors="replace")
+        # Process any newline-delimited messages first
         while "\n" in _rx_buf:
             line, _rx_buf = _rx_buf.split("\n", 1)
             text = line.strip()
             if text and _on_message:
                 logger.info("BLE -> mesh: %s", text)
                 threading.Thread(target=_forward_message, args=(text,), daemon=True).start()
+        # Flush any remaining content that arrived without a newline
+        # (common when using generic BLE terminal apps on iPhone)
+        remainder = _rx_buf.strip()
+        if remainder and _on_message:
+            _rx_buf = ""
+            logger.info("BLE -> mesh: %s", remainder)
+            threading.Thread(target=_forward_message, args=(remainder,), daemon=True).start()
 
     def send(self, text: str):
         """Push a line of text to connected BLE clients via notification."""

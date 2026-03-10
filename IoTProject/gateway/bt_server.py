@@ -119,10 +119,17 @@ class NUSService(Service):
 
 
 def _forward_message(text: str):
+    if _loop is None:
+        return
     try:
         _on_message(text)
+        asyncio.run_coroutine_threadsafe(_notify(f"[sent] {text}"), _loop)
+    except RuntimeError:
+        # No mesh hardware — echo back so the phone knows the Pi received it
+        asyncio.run_coroutine_threadsafe(_notify(f"[recv, no mesh] {text}"), _loop)
     except Exception:
         logger.exception("Error forwarding BLE message to mesh")
+        asyncio.run_coroutine_threadsafe(_notify("[error] mesh send failed"), _loop)
 
 
 # -- Public API ----------------------------------------------------------------

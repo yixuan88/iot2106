@@ -174,7 +174,7 @@ void setup() {
     M5.begin();
     M5.Lcd.setRotation(3);  // landscape, USB on right
     M5.Lcd.fillScreen(BLACK);
-    M5.Lcd.setBrightness(80);
+    M5.Axp.ScreenBreath(80);
 
     BLEDevice::init("M5Stick-Node");
 
@@ -225,7 +225,7 @@ void loop() {
         String msg = String(PRESETS[presetIdx]);
         if (pRxChar) {
             String toSend = msg + "\n";
-            pRxChar->writeValue(toSend.c_str(), toSend.length(), false);
+            pRxChar->writeValue((uint8_t*)toSend.c_str(), toSend.length(), false);
         }
         pushLine(">" + msg);
     }

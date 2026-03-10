@@ -3,143 +3,175 @@ import logging
 import subprocess
 import threading
 
-from bless import (
-    BlessServer,
-    BlessGATTCharacteristic,
-    GATTCharacteristicProperties,
-    GATTAttributePermissions,
-)
+from bluez_peripheral.gatt.service import Service
+from bluez_peripheral.gatt.characteristic import characteristic, CharacteristicFlags as Flags
+from bluez_peripheral.advert import Advertisement
+from bluez_peripheral.agent import NoIoAgent
+from bluez_peripheral.util import get_message_bus, Adapter
 
 logger = logging.getLogger(__name__)
 
-# Nordic UART Service (NUS) — a standard BLE GATT profile that emulates a
-# serial link.  Supported natively by iOS, Android and the ESP32 BLE library.
-NUS_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
-NUS_RX_CHAR_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"  # client writes here → Pi
-NUS_TX_CHAR_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"  # Pi notifies here → client
+NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # client writes -> Pi
+NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # Pi notifies -> client
 
-_server: "BlessServer | None" = None
+_nus_service: "NUSService | None" = None
 _loop: "asyncio.AbstractEventLoop | None" = None
 _on_message = None
 _rx_buf = ""
 
 
-def _setup_ble_agent():  # make the adapter pairable, enable experimental BlueZ features, and register a Just-Works agent
+# -- BlueZ setup ---------------------------------------------------------------
+
+def _setup_ble_agent():
+    """Patch /etc/bluetooth/main.conf for Experimental mode and power on BT adapter."""
     try:
-        # Enable BlueZ experimental mode so iOS connection parameter updates are
-        # handled correctly — without this iOS drops the link with "unknown error".
-        bt_service = "/lib/systemd/system/bluetooth.service"
-        result = subprocess.run(["grep", "-q", "Experimental", bt_service], capture_output=True)
-        if result.returncode != 0:
-            subprocess.run(
-                ["sed", "-i",
-                 "s|^ExecStart=.*bluetoothd.*|& --experimental|",
-                 bt_service],
-                check=True,
-            )
-            subprocess.run(["systemctl", "daemon-reload"], check=True)
-            subprocess.run(["systemctl", "restart", "bluetooth"], check=True)
-            import time; time.sleep(2)
-            logger.info("BlueZ: experimental mode enabled and service restarted")
+        main_conf = "/etc/bluetooth/main.conf"
+        try:
+            with open(main_conf, "r") as f:
+                conf_text = f.read()
+            changed = False
+            if "Experimental = true" not in conf_text:
+                if "[Policy]" in conf_text:
+                    conf_text = conf_text.replace("[Policy]", "[Policy]\nExperimental = true", 1)
+                else:
+                    conf_text += "\n[Policy]\nExperimental = true\n"
+                changed = True
+            if "KeepAliveTimeout" not in conf_text:
+                conf_text = conf_text.replace(
+                    "Experimental = true",
+                    "Experimental = true\nKeepAliveTimeout = 0", 1)
+                changed = True
+            if changed:
+                with open(main_conf, "w") as f:
+                    f.write(conf_text)
+                subprocess.run(["systemctl", "restart", "bluetooth"], check=True)
+                import time; time.sleep(2)
+                logger.info("BlueZ: main.conf updated (Experimental=true, KeepAliveTimeout=0)")
+        except PermissionError:
+            logger.warning("Cannot write %s - run as sudo", main_conf)
 
-        # Pipe commands into bluetoothctl: power on, enable pairing, register a
-        # NoInputNoOutput agent (Just-Works — no PIN required on either side).
-        cmds = "power on\npairable on\nagent NoInputNoOutput\ndefault-agent\n"
-        subprocess.run(
-            ["bluetoothctl"],
-            input=cmds.encode(),
-            capture_output=True,
-            timeout=6,
-        )
-        logger.info("BlueZ: adapter is pairable, Just-Works agent registered")
+        cmds = "power on\npairable on\n"
+        subprocess.run(["bluetoothctl"], input=cmds.encode(), capture_output=True, timeout=6)
+        logger.info("BlueZ: adapter powered on and set to pairable")
     except FileNotFoundError:
-        logger.warning("bluetoothctl not found — pairing may not work")
+        logger.warning("bluetoothctl not found - BT may not work")
     except Exception:
-        logger.exception("Could not configure BlueZ agent")
+        logger.exception("Could not configure BlueZ")
 
 
-def start(on_message_fn):  # starts the BLE NUS GATT peripheral; on_message_fn(text) called for each line received
+# -- GATT service --------------------------------------------------------------
+
+class NUSService(Service):
+    """Nordic UART Service: TX (notify) + RX (write) characteristics."""
+
+    def __init__(self):
+        super().__init__(NUS_SERVICE_UUID, True)
+        self._tx_value = b""
+
+    # TX: Pi -> client (READ so client can cache the value, NOTIFY to push updates)
+    @characteristic(NUS_TX_UUID, Flags.READ | Flags.NOTIFY)
+    def tx_char(self, options):
+        return self._tx_value
+
+    # RX: client -> Pi (WRITE and WRITE_WITHOUT_RESPONSE for iOS compatibility)
+    @characteristic(NUS_RX_UUID, Flags.WRITE | Flags.WRITE_WITHOUT_RESPONSE)
+    def rx_char(self, options):
+        return b""
+
+    @rx_char.setter
+    def rx_char(self, value, options):
+        global _rx_buf
+        _rx_buf += bytes(value).decode("utf-8", errors="replace")
+        while "\n" in _rx_buf:
+            line, _rx_buf = _rx_buf.split("\n", 1)
+            text = line.strip()
+            if text and _on_message:
+                logger.info("BLE -> mesh: %s", text)
+                threading.Thread(target=_forward_message, args=(text,), daemon=True).start()
+
+    def send(self, text: str):
+        """Push a line of text to connected BLE clients via notification."""
+        self._tx_value = (text + "\n").encode("utf-8")
+        self.tx_char.changed(self._tx_value)
+
+
+def _forward_message(text: str):
+    try:
+        _on_message(text)
+    except Exception:
+        logger.exception("Error forwarding BLE message to mesh")
+
+
+# -- Public API ----------------------------------------------------------------
+
+def start(on_message_fn):
+    """Start the BLE NUS GATT peripheral. on_message_fn(text) is called for each line received."""
     global _on_message
     _on_message = on_message_fn
     _setup_ble_agent()
     t = threading.Thread(target=_run_server, daemon=True)
     t.start()
-    logger.info("BLE NUS server thread started — will advertise as 'GatewayBLE'")
+    logger.info("BLE NUS server thread started - will advertise as 'GatewayBLE'")
 
 
-def send(text):  # notifies the connected BLE client with text; silently drops if server not ready
-    if _server is None or _loop is None:
+def send(text):
+    """Send text to the connected BLE client. No-op if no client is connected."""
+    if _nus_service is None or _loop is None:
         return
     asyncio.run_coroutine_threadsafe(_notify(text), _loop)
 
 
-# ── internal ──────────────────────────────────────────────────────────────────
+# -- Internal ------------------------------------------------------------------
 
 async def _notify(text: str):
-    if _server is None:
+    if _nus_service is None:
         return
     try:
-        char = _server.get_characteristic(NUS_TX_CHAR_UUID)
-        char.value = (text + "\n").encode("utf-8")
-        _server.update_value(NUS_SERVICE_UUID, NUS_TX_CHAR_UUID)
+        _nus_service.send(text)
     except Exception:
         logger.exception("BLE TX notify failed")
 
 
-def _on_read(characteristic: BlessGATTCharacteristic, **kwargs) -> bytearray:
-    return characteristic.value
-
-
-def _on_write(characteristic: BlessGATTCharacteristic, value: bytearray, **kwargs):  # called when client sends data on the RX characteristic
-    global _rx_buf
-    _rx_buf += value.decode("utf-8", errors="replace")
-    while "\n" in _rx_buf:
-        line, _rx_buf = _rx_buf.split("\n", 1)
-        text = line.strip()
-        if text and _on_message:
-            logger.info("BLE → mesh: %s", text)
-            try:
-                _on_message(text)
-            except Exception:
-                logger.exception("Error forwarding BLE message to mesh")
-
-
 def _run_server():
-    global _server, _loop
+    global _loop
     _loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_loop)
-    try:
-        _loop.run_until_complete(_setup_and_serve())
-    except Exception:
-        logger.exception("BLE server encountered a fatal error")
+    _loop.run_until_complete(_serve_with_restart())
+
+
+async def _serve_with_restart():
+    while True:
+        try:
+            await _setup_and_serve()
+        except Exception:
+            logger.exception("BLE server crashed - restarting in 3 s")
+        else:
+            logger.warning("BLE server exited cleanly - restarting in 3 s")
+        global _nus_service
+        _nus_service = None
+        await asyncio.sleep(3)
 
 
 async def _setup_and_serve():
-    global _server
-    _server = BlessServer(name="GatewayBLE", loop=asyncio.get_event_loop())
-    _server.read_request_func = _on_read
-    _server.write_request_func = _on_write
+    global _nus_service
 
-    await _server.add_new_service(NUS_SERVICE_UUID)
+    bus = await get_message_bus()
 
-    # TX characteristic — Pi notifies the client
-    await _server.add_new_characteristic(
-        NUS_SERVICE_UUID,
-        NUS_TX_CHAR_UUID,
-        GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
-        bytearray(b""),
-        GATTAttributePermissions.readable,
-    )
+    # Register the GATT service - bluez-peripheral handles ObjectManager internally
+    service = NUSService()
+    await service.register(bus)
+    _nus_service = service
 
-    # RX characteristic — client writes to the Pi
-    await _server.add_new_characteristic(
-        NUS_SERVICE_UUID,
-        NUS_RX_CHAR_UUID,
-        GATTCharacteristicProperties.write | GATTCharacteristicProperties.write_without_response,
-        bytearray(b""),
-        GATTAttributePermissions.writeable,
-    )
+    # Register a Just-Works pairing agent (no PIN required)
+    await NoIoAgent().register(bus)
 
-    await _server.start()
-    logger.info("BLE NUS peripheral advertising as 'GatewayBLE' — ready for connections")
-    await asyncio.Event().wait()  # run until the daemon thread is killed
+    # Get first available BT adapter and start advertising
+    adapter = await Adapter.get_first(bus)
+    await adapter.set_alias("GatewayBLE")
+
+    advert = Advertisement("GatewayBLE", [NUS_SERVICE_UUID], 0x0000, 0)
+    await advert.register(bus, adapter)
+    logger.info("BLE advertising as 'GatewayBLE' - ready for connections")
+
+    await asyncio.Event().wait()

@@ -29,8 +29,8 @@ for svc in hostapd dnsmasq wlan0-static; do
 done
 
 echo "==> Flushing static IP from wlan0"
-ip addr flush dev wlan0 || true
-ip link set wlan0 down || true
+timeout 5 ip addr flush dev wlan0 2>/dev/null || true
+timeout 5 ip link set wlan0 down 2>/dev/null || true
 
 echo "==> Restoring wlan0 to NetworkManager control"
 NM_CONF="/etc/NetworkManager/NetworkManager.conf"

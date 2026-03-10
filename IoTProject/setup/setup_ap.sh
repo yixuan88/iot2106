@@ -57,9 +57,21 @@ echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' > /etc/default/hostapd
 echo "==> Writing dnsmasq config"
 cp "$SCRIPT_DIR/dnsmasq.conf" /etc/dnsmasq.conf
 
+echo "==> Disabling WiFi power management (prevents BLE interference)"
+iw dev wlan0 set power_save off 2>/dev/null || true
+# Persist across reboots via a systemd drop-in
+mkdir -p /etc/systemd/system/wlan0-static.service.d
+cat > /etc/systemd/system/wlan0-static.service.d/power-save.conf <<EOF
+[Service]
+ExecStartPost=/sbin/iw dev wlan0 set power_save off
+EOF
+
+echo "==> Unblocking Bluetooth"
+rfkill unblock bluetooth
+
 echo "==> Enabling and starting services"
-systemctl enable hostapd dnsmasq
-systemctl start hostapd dnsmasq
+systemctl enable hostapd dnsmasq bluetooth
+systemctl start bluetooth hostapd dnsmasq
 
 echo ""
 echo "=============================="

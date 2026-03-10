@@ -175,7 +175,7 @@ void startScan() {
 
 void setup() {
     M5.begin();
-    M5.Lcd.setRotation(1);  // landscape, USB on left (rotation 3 was upside-down)
+    M5.Lcd.setRotation(3);  // landscape, corrects 180° mirror seen with rotation 1
     M5.Lcd.fillScreen(BLACK);
     M5.Axp.ScreenBreath(80);
 

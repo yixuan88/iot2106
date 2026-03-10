@@ -50,9 +50,9 @@ const char* PRESETS[] = {
 const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
 // ── Display layout ────────────────────────────────────────────────────────────
-// M5StickC screen is 160x80 (rotated). At text size 1 each row is 8px → 10 rows.
-// Reserve 2 rows at the bottom for the status indicator.
-#define MSG_ROWS   8
+// M5StickC screen is 160x80 (rotated). At text size 2 each row is 16px → 3 rows.
+// Reserve 2 small rows at the bottom for the status indicator.
+#define MSG_ROWS   3
 #define SCREEN_W 160
 #define SCREEN_H  80
 
@@ -74,7 +74,7 @@ int    presetIdx = 0;
 void redraw();  // forward declaration needed by pushLine
 
 void pushLine(const String& line) {
-    String display = line.length() > 26 ? line.substring(0, 26) : line;
+    String display = line.length() > 13 ? line.substring(0, 13) : line;
     if (msgCount < MSG_ROWS) {
         msgLog[msgCount++] = display;
     } else {
@@ -86,24 +86,27 @@ void pushLine(const String& line) {
 
 void redraw() {
     M5.Lcd.fillScreen(BLACK);
-    M5.Lcd.setTextSize(1);
-    M5.Lcd.setTextColor(WHITE, BLACK);
 
-    // Message log
+    // Message log at size 2 (16px per row)
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(WHITE, BLACK);
     for (int i = 0; i < msgCount; i++) {
-        M5.Lcd.setCursor(0, i * 8);
+        M5.Lcd.setCursor(0, i * 16);
         M5.Lcd.print(msgLog[i]);
     }
+
+    // Status bar at size 1
+    M5.Lcd.setTextSize(1);
 
     // Divider
     M5.Lcd.drawFastHLine(0, SCREEN_H - 18, SCREEN_W, DARKGREY);
 
-    // Status bar (bottom 2 rows)
+    // Status bar (bottom 2 rows, size 1)
     M5.Lcd.setCursor(0, SCREEN_H - 16);
     M5.Lcd.setTextColor(isConnected ? GREEN : RED, BLACK);
     M5.Lcd.print(isConnected ? "BLE OK" : "BLE --");
     M5.Lcd.setTextColor(YELLOW, BLACK);
-    M5.Lcd.print(" [A]=Send [B]=Next");
+    M5.Lcd.print(" [A]Send [B]Next");
     M5.Lcd.setCursor(0, SCREEN_H - 8);
     M5.Lcd.setTextColor(CYAN, BLACK);
 
@@ -172,7 +175,7 @@ void startScan() {
 
 void setup() {
     M5.begin();
-    M5.Lcd.setRotation(3);  // landscape, USB on right
+    M5.Lcd.setRotation(1);  // landscape, USB on left (rotation 3 was upside-down)
     M5.Lcd.fillScreen(BLACK);
     M5.Axp.ScreenBreath(80);
 

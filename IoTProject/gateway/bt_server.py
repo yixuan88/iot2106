@@ -42,6 +42,11 @@ def _setup_ble_agent():
                     "Experimental = true",
                     "Experimental = true\nKeepAliveTimeout = 0", 1)
                 changed = True
+            if "JustWorksRepairing" not in conf_text:
+                conf_text = conf_text.replace(
+                    "Experimental = true",
+                    "Experimental = true\nJustWorksRepairing = always", 1)
+                changed = True
             if changed:
                 with open(main_conf, "w") as f:
                     f.write(conf_text)

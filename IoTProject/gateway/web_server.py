@@ -1,8 +1,10 @@
 import logging
+import time
 from flask import Flask, jsonify, request, abort, send_file
 import io
 
 from gateway import mesh_interface
+from gateway import bt_server
 
 logger = logging.getLogger(__name__)
 
@@ -89,5 +91,22 @@ def create_app(store, file_transfer):
             as_attachment=True,
             download_name=f"transfer_{transfer_id}.bin",
         )
+
+    # ── BLE status & latency endpoints ──────────────────────────────────────
+
+    @app.route("/api/ble/status", methods=["GET"])
+    def ble_status():
+        return jsonify(bt_server.get_status())
+
+    @app.route("/api/ping", methods=["GET"])
+    def wifi_ping():
+        return jsonify({"pong": True, "server_time": time.time()})
+
+    @app.route("/api/latency", methods=["GET"])
+    def latency():
+        return jsonify({
+            "ble_rtt_samples": bt_server.get_latency_samples(),
+            "ble_status": bt_server.get_status(),
+        })
 
     return app

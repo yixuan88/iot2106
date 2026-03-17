@@ -16,12 +16,13 @@
  * Controls:
  *   Button A (front, large) — send the currently selected preset message
  *   Button B (side, small)  — cycle through preset messages
+ *   Button A+B (both)       — BLE latency ping (measures round-trip to gateway)
  */
 
 // ── Board variant ─────────────────────────────────────────────────────────────
 // Uncomment exactly one:
-#include <M5StickC.h>
-// #include <M5StickCPlus.h>
+// #include <M5StickC.h>
+#include <M5StickCPlus.h>
 
 #include <BLEDevice.h>
 #include <BLEClient.h>
@@ -30,13 +31,21 @@
 #include <BLEAdvertisedDevice.h>
 
 // ── Configuration ─────────────────────────────────────────────────────────────
-// Must match the name advertised by bt_server.py on the Pi.
+// Fallback name if no beacon found (must match bt_server.py advertisement).
 #define GATEWAY_BLE_NAME  "GatewayBLE"
 
 // Nordic UART Service UUIDs (lowercase required by ESP32 BLE library)
 #define NUS_SERVICE_UUID  "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 #define NUS_RX_CHAR_UUID  "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  // we write here → Pi
 #define NUS_TX_CHAR_UUID  "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  // Pi notifies here → us
+
+// Beacon manufacturer data constants (must match bt_server.py)
+#define BEACON_COMPANY_ID     0xFFFF  
+#define BEACON_PROTOCOL_VER   0x01
+
+// Reconnection backoff
+#define BACKOFF_INITIAL_MS    1000
+#define BACKOFF_MAX_MS        8000
 
 // ── Preset messages cycled with Button B, sent with Button A ──────────────────
 const char* PRESETS[] = {
@@ -52,9 +61,9 @@ const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 // ── Display layout ────────────────────────────────────────────────────────────
 // M5StickC screen is 160x80 (rotated). At text size 2 each row is 16px → 3 rows.
 // Reserve 2 small rows at the bottom for the status indicator.
-#define MSG_ROWS   3
-#define SCREEN_W 160
-#define SCREEN_H  80
+#define MSG_ROWS   5
+#define SCREEN_W 240
+#define SCREEN_H 135
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 static BLEClient*               pClient   = nullptr;
@@ -69,12 +78,26 @@ String msgLog[MSG_ROWS];
 int    msgCount  = 0;
 int    presetIdx = 0;
 
+// Beacon data parsed from gateway advertisement
+uint16_t gatewayId    = 0;
+bool     meshOk       = false;
+int      gwClients    = 0;
+int      gwRssi       = 0;
+
+// Reconnection with exponential backoff
+uint32_t backoffMs    = BACKOFF_INITIAL_MS;
+int      reconAttempt = 0;
+
+// Latency measurement
+unsigned long pingTimestamp = 0;
+int           lastRttMs     = -1;  // -1 = no measurement yet
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 void redraw();  // forward declaration needed by pushLine
 
 void pushLine(const String& line) {
-    String display = line.length() > 13 ? line.substring(0, 13) : line;
+    String display = line.length() > 20 ? line.substring(0, 20) : line;
     if (msgCount < MSG_ROWS) {
         msgLog[msgCount++] = display;
     } else {
@@ -99,18 +122,34 @@ void redraw() {
     M5.Lcd.setTextSize(1);
 
     // Divider
-    M5.Lcd.drawFastHLine(0, SCREEN_H - 18, SCREEN_W, DARKGREY);
+    M5.Lcd.drawFastHLine(0, SCREEN_H - 26, SCREEN_W, DARKGREY);
 
-    // Status bar (bottom 2 rows, size 1)
-    M5.Lcd.setCursor(0, SCREEN_H - 16);
+    // Row 1: connection + gateway info + latency
+    M5.Lcd.setCursor(0, SCREEN_H - 24);
     M5.Lcd.setTextColor(isConnected ? GREEN : RED, BLACK);
-    M5.Lcd.print(isConnected ? "BLE OK" : "BLE --");
+    M5.Lcd.print(isConnected ? "OK" : "--");
+    if (isConnected && gatewayId) {
+        M5.Lcd.setTextColor(WHITE, BLACK);
+        char info[28];
+        snprintf(info, sizeof(info), " GW:%04X %s R:%d",
+                 gatewayId, meshOk ? "M+" : "M-", gwRssi);
+        M5.Lcd.print(info);
+    }
+    if (lastRttMs >= 0) {
+        M5.Lcd.setTextColor(MAGENTA, BLACK);
+        char rtt[10];
+        snprintf(rtt, sizeof(rtt), " %dms", lastRttMs);
+        M5.Lcd.print(rtt);
+    }
+
+    // Row 2: controls
+    M5.Lcd.setCursor(0, SCREEN_H - 16);
     M5.Lcd.setTextColor(YELLOW, BLACK);
-    M5.Lcd.print(" [A]Send [B]Next");
+    M5.Lcd.print("[A]Send [B]Next [A+B]Ping");
+
+    // Row 3: current preset
     M5.Lcd.setCursor(0, SCREEN_H - 8);
     M5.Lcd.setTextColor(CYAN, BLACK);
-
-    // Truncate preset to fit after "> "
     String preset = String(PRESETS[presetIdx]);
     if (preset.length() > 24) preset = preset.substring(0, 24);
     M5.Lcd.print("> ");
@@ -127,14 +166,54 @@ static void notifyCallback(BLERemoteCharacteristic* pChar,
         char c = (char)pData[i];
         if (c != '\n' && c != '\r') line += c;
     }
-    if (line.length() > 0) pushLine(line);
+    if (line.length() == 0) return;
+
+    // Check for PONG response (latency measurement)
+    if (line.startsWith("PONG:") && pingTimestamp > 0) {
+        unsigned long sent = strtoul(line.substring(5).c_str(), NULL, 10);
+        if (sent == pingTimestamp) {
+            lastRttMs = (int)(millis() - pingTimestamp);
+            pingTimestamp = 0;
+            redraw();
+            return;
+        }
+    }
+    pushLine(line);
+}
+
+// Parse beacon manufacturer data from a gateway advertisement.
+// Returns true if this device has a valid gateway beacon.
+static bool parseBeacon(BLEAdvertisedDevice& dev) {
+    if (!dev.haveManufacturerData()) return false;
+    String mfr = dev.getManufacturerData();
+    // Format: [company_lo, company_hi, proto_ver, gw_id_hi, gw_id_lo, mesh, clients]
+    // ESP32 BLE library returns manufacturer data with company ID as first 2 bytes (LE)
+    if (mfr.length() < 7) return false;
+    uint16_t company = (uint8_t)mfr[0] | ((uint8_t)mfr[1] << 8);
+    if (company != BEACON_COMPANY_ID) return false;
+    if ((uint8_t)mfr[2] != BEACON_PROTOCOL_VER) return false;
+    gatewayId  = ((uint8_t)mfr[3] << 8) | (uint8_t)mfr[4];
+    meshOk     = (uint8_t)mfr[5] != 0;
+    gwClients  = (uint8_t)mfr[6];
+    gwRssi     = dev.getRSSI();
+    return true;
 }
 
 // Called once per advertisement during a BLE scan
 class ScanCallbacks : public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice dev) override {
+        // Prefer beacon-based discovery
+        if (parseBeacon(dev)) {
+            BLEDevice::getScan()->stop();
+            if (targetDev) delete targetDev;  // fix memory leak
+            targetDev = new BLEAdvertisedDevice(dev);
+            doConnect = true;
+            return;
+        }
+        // Fallback: match by name
         if (dev.haveName() && dev.getName() == GATEWAY_BLE_NAME) {
             BLEDevice::getScan()->stop();
+            if (targetDev) delete targetDev;  // fix memory leak
             targetDev = new BLEAdvertisedDevice(dev);
             doConnect = true;
         }
@@ -201,27 +280,45 @@ void loop() {
         M5.Lcd.println("Connecting...");
         if (connectToGateway()) {
             isConnected = true;
+            backoffMs = BACKOFF_INITIAL_MS;  // reset backoff on success
+            reconAttempt = 0;
             pushLine("[BLE connected]");
         } else {
-            pushLine("[connect failed]");
-            delay(2000);
+            reconAttempt++;
+            char buf[22];
+            snprintf(buf, sizeof(buf), "[failed #%d]", reconAttempt);
+            pushLine(buf);
+            delay(backoffMs);
+            backoffMs = min(backoffMs * 2, (uint32_t)BACKOFF_MAX_MS);
             startScan();
         }
         return;
     }
 
-    // ── Detect disconnection and re-scan ───────────────────────────────────
+    // ── Detect disconnection and re-scan with backoff ──────────────────────
     if (isConnected && (!pClient || !pClient->isConnected())) {
         isConnected = false;
         pRxChar = nullptr;
         pTxChar = nullptr;
         pushLine("[disconnected]");
-        delay(1000);
+        delay(backoffMs);
+        backoffMs = min(backoffMs * 2, (uint32_t)BACKOFF_MAX_MS);
         startScan();
         return;
     }
 
     if (!isConnected) return;
+
+    // ── Both buttons pressed — BLE latency ping ────────────────────────────
+    if (M5.BtnA.wasPressed() && M5.BtnB.isPressed()) {
+        if (pRxChar && pingTimestamp == 0) {
+            pingTimestamp = millis();
+            String ping = "PING:" + String(pingTimestamp) + "\n";
+            pRxChar->writeValue((uint8_t*)ping.c_str(), ping.length(), false);
+            pushLine("[ping sent]");
+        }
+        return;  // don't also send preset
+    }
 
     // ── Button A — send selected preset ────────────────────────────────────
     if (M5.BtnA.wasPressed()) {

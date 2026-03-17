@@ -73,16 +73,25 @@ def main():  # wires up all components and starts the flask web server
     mesh_interface.register_receive_callback(on_packet)
 
     if args.bluetooth:
-        bt_server.start(on_message_fn=lambda text: mesh_interface.send_text(text))
+        bt_server.start(
+            on_message_fn=lambda text: mesh_interface.send_text(text),
+            on_text_fn=None,  # Teammate: wire to mqtt_bridge.publish() here
+        )
 
+    mesh_connected = False
     try:
         mesh_interface.connect(device=args.device, transport=args.transport)
+        mesh_connected = True
     except Exception:
         logger.warning(
             "Could not connect to mesh node (%s, %s) — running without hardware",
             args.transport,
             args.device or "auto-detected",
         )
+
+    # Update BLE beacon with mesh connection status
+    if args.bluetooth:
+        bt_server.set_mesh_connected(mesh_connected)
 
     app = create_app(store, ft)
     logger.info("Starting web server on %s:%d", HOST, PORT)

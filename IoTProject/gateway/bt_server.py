@@ -1,7 +1,11 @@
 import asyncio
+import hashlib
 import logging
+import socket
+import struct
 import subprocess
 import threading
+import time
 
 from bluez_peripheral.gatt.service import Service
 from bluez_peripheral.gatt.characteristic import characteristic, CharacteristicFlags as Flags
@@ -15,10 +19,27 @@ NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # client writes -> Pi
 NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # Pi notifies -> client
 
+# Beacon manufacturer data constants
+BEACON_COMPANY_ID = 0xFFFF        # Unregistered / development use
+BEACON_PROTOCOL_VER = 0x01
+
 _nus_service: "NUSService | None" = None
 _loop: "asyncio.AbstractEventLoop | None" = None
 _on_message = None
+_on_text = None                   # Teammate callback (e.g. MQTT publish)
 _rx_buf = ""
+_rx_lock = threading.Lock()       # Thread safety for _rx_buf
+_client_count = 0
+_mesh_connected = False
+_advert: "Advertisement | None" = None
+_bus = None
+_adapter = None
+_gateway_id = 0                   # 2-byte ID derived from hostname
+
+# Latency tracking
+_latency_samples: list = []       # Recent BLE RTT measurements (ms)
+_latency_lock = threading.Lock()
+MAX_LATENCY_SAMPLES = 50
 
 
 # -- BlueZ setup ---------------------------------------------------------------
@@ -79,6 +100,51 @@ def _setup_ble_agent():
         logger.exception("Could not configure BlueZ")
 
 
+# -- Beacon helpers ------------------------------------------------------------
+
+def _compute_gateway_id() -> int:
+    """Derive a 2-byte gateway ID from the hostname."""
+    hostname = socket.gethostname()
+    digest = hashlib.md5(hostname.encode()).digest()
+    return struct.unpack(">H", digest[:2])[0]
+
+
+def _build_beacon_data() -> bytes:
+    """Build manufacturer-specific beacon payload (5 bytes)."""
+    return struct.pack(">BHBB",
+                       BEACON_PROTOCOL_VER,
+                       _gateway_id,
+                       0x01 if _mesh_connected else 0x00,
+                       min(_client_count, 255))
+
+
+def _create_advertisement() -> Advertisement:
+    """Create a BLE advertisement with NUS service UUID and beacon data."""
+    return Advertisement(
+        "GatewayBLE",
+        [NUS_SERVICE_UUID],
+        appearance=0x0000,
+        timeout=0,
+        manufacturer_data={BEACON_COMPANY_ID: _build_beacon_data()},
+    )
+
+
+async def _refresh_advertisement():
+    """Unregister old advertisement and register a new one with updated beacon data."""
+    global _advert
+    if _bus is None or _adapter is None:
+        return
+    try:
+        if _advert is not None:
+            await _advert.unregister()
+        _advert = _create_advertisement()
+        await _advert.register(_bus, adapter=_adapter)
+        logger.debug("BLE beacon refreshed (clients=%d, mesh=%s)",
+                     _client_count, _mesh_connected)
+    except Exception:
+        logger.exception("Failed to refresh BLE advertisement")
+
+
 # -- GATT service --------------------------------------------------------------
 
 class NUSService(Service):
@@ -101,21 +167,22 @@ class NUSService(Service):
     @rx_char.setter
     def rx_char(self, value, options):
         global _rx_buf
-        _rx_buf += bytes(value).decode("utf-8", errors="replace")
-        # Process any newline-delimited messages first
-        while "\n" in _rx_buf:
-            line, _rx_buf = _rx_buf.split("\n", 1)
-            text = line.strip()
-            if text and _on_message:
-                logger.info("BLE -> mesh: %s", text)
-                threading.Thread(target=_forward_message, args=(text,), daemon=True).start()
-        # Flush any remaining content that arrived without a newline
-        # (common when using generic BLE terminal apps on iPhone)
-        remainder = _rx_buf.strip()
-        if remainder and _on_message:
-            _rx_buf = ""
-            logger.info("BLE -> mesh: %s", remainder)
-            threading.Thread(target=_forward_message, args=(remainder,), daemon=True).start()
+        with _rx_lock:
+            _rx_buf += bytes(value).decode("utf-8", errors="replace")
+            # Process any newline-delimited messages first
+            while "\n" in _rx_buf:
+                line, _rx_buf = _rx_buf.split("\n", 1)
+                text = line.strip()
+                if text:
+                    threading.Thread(target=_handle_received_text,
+                                     args=(text,), daemon=True).start()
+            # Flush any remaining content that arrived without a newline
+            # (common when using generic BLE terminal apps on iPhone)
+            remainder = _rx_buf.strip()
+            if remainder:
+                _rx_buf = ""
+                threading.Thread(target=_handle_received_text,
+                                 args=(remainder,), daemon=True).start()
 
     def send(self, text: str):
         """Push a line of text to connected BLE clients via notification."""
@@ -123,11 +190,25 @@ class NUSService(Service):
         self.tx_char.changed(self._tx_value)
 
 
+def _handle_received_text(text: str):
+    """Route received BLE text: PING/PONG for latency, else forward to mesh/MQTT."""
+    if text.startswith("PING:"):
+        # Latency measurement — immediately echo back as PONG
+        logger.info("BLE latency PING received")
+        if _loop:
+            asyncio.run_coroutine_threadsafe(_notify(f"PONG:{text[5:]}"), _loop)
+        return
+    logger.info("BLE -> mesh: %s", text)
+    _forward_message(text)
+
+
 def _forward_message(text: str):
     if _loop is None:
         return
+    # Route to mesh (existing path)
     try:
-        _on_message(text)
+        if _on_message:
+            _on_message(text)
         asyncio.run_coroutine_threadsafe(_notify(f"[sent] {text}"), _loop)
     except RuntimeError:
         # No mesh hardware — echo back so the phone knows the Pi received it
@@ -135,18 +216,31 @@ def _forward_message(text: str):
     except Exception:
         logger.exception("Error forwarding BLE message to mesh")
         asyncio.run_coroutine_threadsafe(_notify("[error] mesh send failed"), _loop)
+    # Route to teammate callback (e.g. local MQTT publish)
+    if _on_text:
+        try:
+            _on_text(text)
+        except Exception:
+            logger.exception("on_text callback failed")
 
 
 # -- Public API ----------------------------------------------------------------
 
-def start(on_message_fn):
-    """Start the BLE NUS GATT peripheral. on_message_fn(text) is called for each line received."""
-    global _on_message
+def start(on_message_fn, on_text_fn=None):
+    """Start the BLE NUS GATT peripheral.
+
+    Args:
+        on_message_fn: Called with (text) for each BLE message — routes to mesh.
+        on_text_fn:    Optional extra callback (text) — teammate hooks MQTT here.
+    """
+    global _on_message, _on_text, _gateway_id
     _on_message = on_message_fn
+    _on_text = on_text_fn
+    _gateway_id = _compute_gateway_id()
     _setup_ble_agent()
     t = threading.Thread(target=_run_server, daemon=True)
     t.start()
-    logger.info("BLE NUS server thread started - will advertise as 'GatewayBLE'")
+    logger.info("BLE NUS server thread started - gateway_id=0x%04X", _gateway_id)
 
 
 def send(text):
@@ -154,6 +248,32 @@ def send(text):
     if _nus_service is None or _loop is None:
         return
     asyncio.run_coroutine_threadsafe(_notify(text), _loop)
+
+
+def set_mesh_connected(connected: bool):
+    """Update the mesh-connected flag in the beacon advertisement."""
+    global _mesh_connected
+    if _mesh_connected == connected:
+        return
+    _mesh_connected = connected
+    if _loop:
+        asyncio.run_coroutine_threadsafe(_refresh_advertisement(), _loop)
+
+
+def get_status() -> dict:
+    """Return current BLE status for the web API."""
+    return {
+        "advertising": _advert is not None,
+        "gateway_id": f"0x{_gateway_id:04X}",
+        "client_count": _client_count,
+        "mesh_connected": _mesh_connected,
+    }
+
+
+def get_latency_samples() -> list:
+    """Return recent BLE latency measurements."""
+    with _latency_lock:
+        return list(_latency_samples)
 
 
 # -- Internal ------------------------------------------------------------------
@@ -188,9 +308,10 @@ async def _serve_with_restart():
 
 
 async def _setup_and_serve():
-    global _nus_service
+    global _nus_service, _advert, _bus, _adapter
 
     bus = await get_message_bus()
+    _bus = bus
 
     # Construct the adapter directly from the known path instead of using
     # Adapter.get_first()/get_all() which is buggy in 0.1.7 -- it iterates over
@@ -198,6 +319,7 @@ async def _setup_and_serve():
     adapter_intro = await bus.introspect("org.bluez", "/org/bluez/hci0")
     adapter_proxy = bus.get_proxy_object("org.bluez", "/org/bluez/hci0", adapter_intro)
     adapter = Adapter(adapter_proxy)
+    _adapter = adapter
 
     # Register the GATT service with the explicit adapter
     service = NUSService()
@@ -207,8 +329,10 @@ async def _setup_and_serve():
     # Register a Just-Works pairing agent (no PIN required)
     await NoIoAgent().register(bus)
 
-    advert = Advertisement("GatewayBLE", [NUS_SERVICE_UUID], 0x0000, 0)
-    await advert.register(bus, adapter)
-    logger.info("BLE advertising as 'GatewayBLE' - ready for connections")
+    # Start advertising with beacon manufacturer data
+    _advert = _create_advertisement()
+    await _advert.register(bus, adapter=adapter)
+    logger.info("BLE advertising as 'GatewayBLE' (beacon: gateway_id=0x%04X) - ready",
+                _gateway_id)
 
     await asyncio.Event().wait()

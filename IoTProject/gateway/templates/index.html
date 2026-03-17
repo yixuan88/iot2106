@@ -97,6 +97,20 @@
   </div>
 
   <div class="card">
+    <h2>Latency &amp; BLE Status</h2>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.85rem;">
+      <div>
+        <strong>WiFi RTT:</strong> <span id="wifi-rtt">—</span>
+        <button onclick="measureWifiPing()" style="margin-left:6px;padding:2px 10px;font-size:0.8rem;">Ping</button>
+      </div>
+      <div><strong>BLE RTT:</strong> <span id="ble-rtt">—</span></div>
+      <div><strong>BLE Clients:</strong> <span id="ble-clients">—</span></div>
+      <div><strong>Gateway ID:</strong> <span id="ble-gw-id">—</span></div>
+      <div><strong>Mesh:</strong> <span id="ble-mesh">—</span></div>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>Messages</h2>
     <div id="message-log"></div>
     <form id="send-form" style="margin-top:14px;">
@@ -329,15 +343,52 @@
     } catch(_) {}
   }
 
+  // ── WiFi latency measurement ────────────────────────────────────────────
+  async function measureWifiPing() {
+    const el = document.getElementById("wifi-rtt");
+    try {
+      const t0 = performance.now();
+      const r = await fetch("/api/ping");
+      if (!r.ok) { el.textContent = "error"; return; }
+      await r.json();
+      const rtt = Math.round(performance.now() - t0);
+      el.textContent = rtt + " ms";
+    } catch(_) { el.textContent = "error"; }
+  }
+
+  // ── BLE status & latency polling ──────────────────────────────────────
+  async function loadBleStatus() {
+    try {
+      const r = await fetch("/api/latency");
+      if (!r.ok) return;
+      const data = await r.json();
+      const s = data.ble_status || {};
+      document.getElementById("ble-clients").textContent = s.client_count ?? "—";
+      document.getElementById("ble-gw-id").textContent = s.gateway_id || "—";
+      document.getElementById("ble-mesh").textContent = s.mesh_connected ? "Connected" : "Offline";
+      const samples = data.ble_rtt_samples || [];
+      if (samples.length > 0) {
+        const avg = Math.round(samples.reduce((a,b) => a+b, 0) / samples.length);
+        const last = samples[samples.length - 1];
+        document.getElementById("ble-rtt").textContent = last + " ms (avg " + avg + " ms)";
+      } else {
+        document.getElementById("ble-rtt").textContent = "—";
+      }
+    } catch(_) {}
+  }
+
   setInterval(pollMessages, 2000);
   setInterval(loadNodes, 15000);
   setInterval(loadLocalNode, 30000);
   setInterval(refreshReceivedList, 10000);
+  setInterval(loadBleStatus, 5000);
 
   pollMessages();
   loadLocalNode();
   loadNodes();
   refreshReceivedList();
+  loadBleStatus();
+  measureWifiPing();
 </script>
 </body>
 </html>

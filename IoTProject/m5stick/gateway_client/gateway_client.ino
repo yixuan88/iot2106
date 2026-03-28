@@ -32,7 +32,7 @@
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 // Fallback name if no beacon found (must match bt_server.py advertisement).
-#define GATEWAY_BLE_NAME  "GatewayBLE-1"
+#define GATEWAY_BLE_NAME  "GatewayBLE"
 
 // Nordic UART Service UUIDs (lowercase required by ESP32 BLE library)
 #define NUS_SERVICE_UUID  "6e400001-b5a3-f393-e0a9-e50e24dcca9e"

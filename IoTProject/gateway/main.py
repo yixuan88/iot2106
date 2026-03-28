@@ -98,7 +98,7 @@ def main():  # wires up all components and starts the flask web server
             "ts": time.time(),
         })
         try:
-            mqtt_bridge._client.publish(topic, payload, qos=0)
+            mqtt_bridge._client.publish(topic, payload, qos=0, retain=True)
             logger.info("BLE device %s — published to MQTT", "connected" if connected else "disconnected")
         except Exception:
             logger.warning("Could not publish BLE presence to MQTT")

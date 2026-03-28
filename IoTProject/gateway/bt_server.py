@@ -241,6 +241,7 @@ def start(on_message_fn, on_text_fn=None, on_ble_connect_fn=None):
     _on_ble_connect = on_ble_connect_fn
     _gateway_id = _compute_gateway_id()
     _setup_ble_agent()
+    time.sleep(3)  # Wait for BlueZ to settle after config changes
     t = threading.Thread(target=_run_server, daemon=True)
     t.start()
     logger.info("BLE NUS server thread started - gateway_id=0x%04X", _gateway_id)
@@ -334,12 +335,21 @@ async def _serve_with_restart():
         try:
             await _setup_and_serve()
         except Exception:
-            logger.exception("BLE server crashed - restarting in 3 s")
+            logger.exception("BLE server crashed - restarting in 5 s")
         else:
-            logger.warning("BLE server exited cleanly - restarting in 3 s")
-        global _nus_service
+            logger.warning("BLE server exited cleanly - restarting in 5 s")
+        global _nus_service, _bus, _adapter, _advert
         _nus_service = None
-        await asyncio.sleep(3)
+        _advert = None
+        # Close stale D-Bus connection so the next attempt gets a fresh one
+        if _bus is not None:
+            try:
+                _bus.disconnect()
+            except Exception:
+                pass
+            _bus = None
+        _adapter = None
+        await asyncio.sleep(5)
 
 
 async def _setup_and_serve():

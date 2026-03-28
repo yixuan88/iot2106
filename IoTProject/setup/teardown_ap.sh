@@ -6,9 +6,10 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-# ── WiFi credentials to connect to after the AP is torn down ─────────────────
-WIFI_SSID="jer"
-WIFI_PASSWORD="jeraldgo"
+# ── WiFi credentials to reconnect to after AP is torn down ─────────────────
+# Override with: sudo WIFI_SSID=mynet WIFI_PASSWORD=mypass bash teardown_ap.sh
+WIFI_SSID="${WIFI_SSID:-${1:-jer}}"
+WIFI_PASSWORD="${WIFI_PASSWORD:-${2:-jeraldgo}}"
 
 echo "==> Saving WiFi profile for '$WIFI_SSID' (takes effect after NM restarts)"
 # Remove any stale profile for this SSID to avoid duplicates
@@ -22,12 +23,18 @@ nmcli connection add \
   wifi-sec.psk "$WIFI_PASSWORD" \
   connection.autoconnect yes
 
-echo "==> Stopping AP services"
-systemctl stop hostapd dnsmasq mosquitto gateway wlan0-static || true
-for svc in hostapd dnsmasq wlan0-static; do
+# ── Stop all gateway services ──────────────────────��───────────────────────
+echo "==> Stopping gateway, MQTT broker, and AP services"
+systemctl stop gateway mosquitto hostapd dnsmasq wlan0-static || true
+for svc in gateway mosquitto hostapd dnsmasq wlan0-static; do
   timeout 5 systemctl disable --no-reload "$svc" 2>/dev/null || true
 done
 
+# ── Clean up MQTT broker config ────────────────────────────────────────────
+echo "==> Removing gateway MQTT config"
+rm -f /etc/mosquitto/conf.d/gateway.conf
+
+# ── Restore WiFi ───────��───────────────────────────────────────────────────
 echo "==> Flushing static IP from wlan0"
 timeout 5 ip addr flush dev wlan0 2>/dev/null || true
 timeout 5 ip link set wlan0 down 2>/dev/null || true
@@ -49,9 +56,13 @@ nmcli connection up "$WIFI_SSID" || true
 
 echo ""
 echo "=============================="
-echo " AP stopped. wlan0 is back under NetworkManager."
+echo " AP + MQTT + Gateway stopped."
+echo " wlan0 is back under NetworkManager."
 echo " Connecting to: $WIFI_SSID"
+echo ""
 echo " To connect to a different network:"
 echo "   nmcli device wifi list"
 echo "   nmcli device wifi connect <SSID> password <PASSWORD>"
+echo ""
+echo " To re-deploy: sudo bash setup/autosetup.sh"
 echo "=============================="

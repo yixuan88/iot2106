@@ -9,7 +9,7 @@ PHASE="${PHASE:-1}"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
-# ── Phase 1 ──────────────────────────────────────────────────────────────────
+# ── Phase 1 (runs while Pi still has internet via SSH) ──────────────────────
 
 phase1() {
     if [[ $EUID -ne 0 ]]; then
@@ -28,7 +28,12 @@ phase1() {
     log "=== Mesh Gateway Setup — Phase 1 ==="
     log "User: $REAL_USER | Home: $USER_HOME | Project: $PROJECT_DIR"
 
-    # Step 1: Python venv and dependencies
+    # Step 1: Install system packages while internet is available
+    log "Installing system packages (hostapd, dnsmasq, mosquitto, bluez)..."
+    apt-get update -qq
+    apt-get install -y hostapd dnsmasq mosquitto bluez
+
+    # Step 2: Python venv and dependencies
     log "Creating Python virtual environment..."
     sudo -u "$REAL_USER" python3 -m venv "$PROJECT_DIR/venv"
 
@@ -36,7 +41,16 @@ phase1() {
     sudo -u "$REAL_USER" "$PROJECT_DIR/venv/bin/pip" install \
         -r "$PROJECT_DIR/requirements.txt"
 
-    # Step 2: Patch gateway.service with the real username and project path,
+    # Step 3: Download mqtt.min.js while internet is still available
+    # Phase 2 switches wlan0 to AP mode, killing internet access.
+    log "Downloading MQTT.js for browser clients..."
+    mkdir -p "$PROJECT_DIR/gateway/static"
+    wget -q -O "$PROJECT_DIR/gateway/static/mqtt.min.js" \
+        "https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js" \
+        || log "WARNING: Could not download mqtt.min.js — copy it manually to gateway/static/"
+    chown -R "$REAL_USER:$REAL_USER" "$PROJECT_DIR/gateway/static"
+
+    # Step 4: Patch gateway.service with the real username and project path,
     #         then install and enable it
     log "Installing gateway.service..."
     local tmp_svc
@@ -51,10 +65,7 @@ phase1() {
     systemctl enable gateway
     log "gateway.service enabled."
 
-    # Step 3: Pre-generate WiFi credentials here, while SSH is still alive.
-    #         setup_ap.sh will use this passphrase via the PASSPHRASE env var.
-    #         This avoids the chicken-and-egg problem where the password is
-    #         printed to a log you can't access until you're already connected.
+    # Step 5: Pre-generate WiFi credentials here, while SSH is still alive.
     local ssid passphrase
     ssid="MeshGateway-$(hostname)"
     passphrase="password"
@@ -65,13 +76,14 @@ phase1() {
     echo "  SSID     : $ssid"
     echo "  Password : $passphrase"
     echo "  URL      : http://192.168.4.1:5000"
+    echo "  MQTT WS  : ws://192.168.4.1:9001"
     echo "================================================"
     echo ""
 
-    # Step 4: Stop any leftover setup unit from a previous run
+    # Step 6: Stop any leftover setup unit from a previous run
     systemctl stop mesh-gateway-setup 2>/dev/null || true
 
-    # Step 5: Launch Phase 2 as a systemd transient unit.
+    # Step 7: Launch Phase 2 as a systemd transient unit.
     #         It runs independently of this SSH session — when wlan0 becomes
     #         an AP and SSH drops, Phase 2 keeps running unaffected.
     log "Launching Phase 2 as a systemd unit (survives SSH disconnect)..."
@@ -92,7 +104,7 @@ phase1() {
     log "Connect to '$ssid' using the password above, then open http://192.168.4.1:5000"
 }
 
-# ── Phase 2 ──────────────────────────────────────────────────────────────────
+# ── Phase 2 (runs as systemd unit, survives SSH drop) ───────────────────────
 
 phase2() {
     if [[ -z "${PASSPHRASE:-}" ]]; then
@@ -104,7 +116,7 @@ phase2() {
 
     log "=== Mesh Gateway Setup — Phase 2 ==="
 
-    log "Configuring WiFi access point..."
+    log "Configuring WiFi AP, MQTT broker, and Bluetooth..."
     PASSPHRASE="$PASSPHRASE" bash "$PROJECT_DIR/setup/setup_ap.sh" 2>&1 \
         | tee -a "$LOG_FILE"
 
@@ -112,12 +124,14 @@ phase2() {
     systemctl start gateway
 
     log "=== Verification ==="
-    log "hostapd : $(systemctl is-active hostapd 2>/dev/null || echo unknown)"
-    log "dnsmasq : $(systemctl is-active dnsmasq 2>/dev/null || echo unknown)"
-    log "gateway : $(systemctl is-active gateway 2>/dev/null || echo unknown)"
+    log "hostapd   : $(systemctl is-active hostapd 2>/dev/null || echo unknown)"
+    log "dnsmasq   : $(systemctl is-active dnsmasq 2>/dev/null || echo unknown)"
+    log "mosquitto : $(systemctl is-active mosquitto 2>/dev/null || echo unknown)"
+    log "bluetooth : $(systemctl is-active bluetooth 2>/dev/null || echo unknown)"
+    log "gateway   : $(systemctl is-active gateway 2>/dev/null || echo unknown)"
     local wlan_ip
     wlan_ip=$(ip addr show wlan0 2>/dev/null | awk '/inet / {print $2}') || wlan_ip="not found"
-    log "wlan0   : $wlan_ip"
+    log "wlan0     : $wlan_ip"
     log "=== Setup complete ==="
 }
 

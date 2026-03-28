@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 
+from dbus_next import Message
 from bluez_peripheral.gatt.service import Service
 from bluez_peripheral.gatt.characteristic import characteristic, CharacteristicFlags as Flags
 from bluez_peripheral.advert import Advertisement
@@ -209,6 +210,17 @@ def _handle_received_text(text: str):
         if _loop:
             asyncio.run_coroutine_threadsafe(_notify(f"PONG:{text[5:]}"), _loop)
         return
+    if text.startswith("BLRTT:"):
+        # M5StickC reporting its measured BLE round-trip time
+        try:
+            rtt_ms = int(text[6:])
+            with _latency_lock:
+                _latency_samples.append(rtt_ms)
+                _latency_samples[:] = _latency_samples[-MAX_LATENCY_SAMPLES:]
+            logger.info("BLE RTT reported by client: %d ms", rtt_ms)
+        except ValueError:
+            pass
+        return
     logger.info("BLE -> mesh: %s", text)
     _forward_message(text)
 
@@ -393,7 +405,16 @@ async def _setup_and_serve():
     logger.info("BLE advertising as 'GatewayBLE' (beacon: gateway_id=0x%04X) - ready",
                 _gateway_id)
 
-    # Monitor BLE client connect/disconnect via D-Bus PropertiesChanged signals
+    # Subscribe to BlueZ PropertiesChanged signals for BLE client connect/disconnect
+    await bus.call(Message(
+        destination="org.freedesktop.DBus",
+        interface="org.freedesktop.DBus",
+        path="/org/freedesktop/DBus",
+        member="AddMatch",
+        signature="s",
+        body=["type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',arg0='org.bluez.Device1'"],
+    ))
     bus.add_message_handler(_on_dbus_message)
+    logger.info("BLE: subscribed to D-Bus connect/disconnect signals")
 
     await asyncio.Event().wait()

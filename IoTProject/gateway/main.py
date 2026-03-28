@@ -86,10 +86,24 @@ def main():  # wires up all components and starts the flask web server
 
     mesh_interface.register_receive_callback(on_packet)
 
+    def on_ble_connect(connected):
+        """Publish MQTT presence when a BLE client connects/disconnects."""
+        if not args.mqtt:
+            return
+        import json, time
+        topic = "mesh/presence/BLE-device"
+        payload = json.dumps({
+            "status": "online" if connected else "offline",
+            "username": "BLE-device",
+            "ts": time.time(),
+        })
+        mqtt_bridge._client.publish(topic, payload, qos=0)
+
     if args.bluetooth:
         bt_server.start(
             on_message_fn=lambda text: mesh_interface.send_text(text),
             on_text_fn=(lambda text: mqtt_bridge.publish_text(text)) if args.mqtt else None,
+            on_ble_connect_fn=on_ble_connect if args.mqtt else None,
         )
 
     mesh_connected = False

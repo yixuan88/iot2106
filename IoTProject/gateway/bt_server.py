@@ -27,6 +27,7 @@ _nus_service: "NUSService | None" = None
 _loop: "asyncio.AbstractEventLoop | None" = None
 _on_message = None
 _on_text = None                   # Teammate callback (e.g. MQTT publish)
+_on_ble_connect = None            # Callback for BLE client connect/disconnect
 _rx_buf = ""
 _rx_lock = threading.Lock()       # Thread safety for _rx_buf
 _client_count = 0
@@ -226,16 +227,18 @@ def _forward_message(text: str):
 
 # -- Public API ----------------------------------------------------------------
 
-def start(on_message_fn, on_text_fn=None):
+def start(on_message_fn, on_text_fn=None, on_ble_connect_fn=None):
     """Start the BLE NUS GATT peripheral.
 
     Args:
-        on_message_fn: Called with (text) for each BLE message — routes to mesh.
-        on_text_fn:    Optional extra callback (text) — teammate hooks MQTT here.
+        on_message_fn:    Called with (text) for each BLE message — routes to mesh.
+        on_text_fn:       Optional extra callback (text) — teammate hooks MQTT here.
+        on_ble_connect_fn: Optional callback (connected: bool) — called on BLE client connect/disconnect.
     """
-    global _on_message, _on_text, _gateway_id
+    global _on_message, _on_text, _on_ble_connect, _gateway_id
     _on_message = on_message_fn
     _on_text = on_text_fn
+    _on_ble_connect = on_ble_connect_fn
     _gateway_id = _compute_gateway_id()
     _setup_ble_agent()
     t = threading.Thread(target=_run_server, daemon=True)
@@ -277,6 +280,38 @@ def get_latency_samples() -> list:
 
 
 # -- Internal ------------------------------------------------------------------
+
+def _on_dbus_message(msg):
+    """Handle D-Bus signals from BlueZ to detect BLE client connect/disconnect."""
+    global _client_count
+    if msg.message_type.name != "SIGNAL":
+        return False
+    if msg.member != "PropertiesChanged":
+        return False
+    args = msg.body
+    if len(args) < 2 or args[0] != "org.bluez.Device1":
+        return False
+    changed = args[1]
+    if "Connected" not in changed:
+        return False
+    connected = changed["Connected"].value
+    if connected:
+        _client_count += 1
+        logger.info("BLE client connected (total: %d)", _client_count)
+    else:
+        _client_count = max(0, _client_count - 1)
+        logger.info("BLE client disconnected (total: %d)", _client_count)
+    # Refresh beacon with updated client count
+    if _loop:
+        asyncio.run_coroutine_threadsafe(_refresh_advertisement(), _loop)
+    # Notify callback (e.g. MQTT presence)
+    if _on_ble_connect:
+        try:
+            _on_ble_connect(connected)
+        except Exception:
+            logger.exception("on_ble_connect callback failed")
+    return False
+
 
 async def _notify(text: str):
     if _nus_service is None:
@@ -334,5 +369,8 @@ async def _setup_and_serve():
     await _advert.register(bus, adapter=adapter)
     logger.info("BLE advertising as 'GatewayBLE' (beacon: gateway_id=0x%04X) - ready",
                 _gateway_id)
+
+    # Monitor BLE client connect/disconnect via D-Bus PropertiesChanged signals
+    bus.add_message_handler(_on_dbus_message)
 
     await asyncio.Event().wait()

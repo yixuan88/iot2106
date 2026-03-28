@@ -82,6 +82,10 @@
       display: inline-block; font-size: 0.65rem; font-weight: 700;
       background: rgba(0,0,0,.12); border-radius: 8px; padding: 1px 6px; margin-bottom: 3px;
     }
+    .msg.system {
+      background: none; align-self: center; max-width: 100%;
+      color: #888; font-size: 0.78rem; font-style: italic; padding: 2px 0;
+    }
     .no-msgs { color: #aaa; font-size: 0.85rem; text-align: center; margin: auto; }
 
     /* ── Send bar ── */
@@ -567,14 +571,30 @@
         chip.title = 'Click to DM';
         chip.addEventListener('click', function() { startDm(user); });
         presenceEl.appendChild(chip);
+        appendSystemMsg(user + ' joined the network');
       }
     } else {
       var chip = presenceEl.querySelector('[data-user="' + user + '"]');
-      if (chip) chip.remove();
+      if (chip) {
+        chip.remove();
+        appendSystemMsg(user + ' left the network');
+      }
       if (!presenceEl.children.length) {
         presenceEl.innerHTML = '<span style="color:#aaa;font-size:.82rem;">No one else here yet</span>';
       }
     }
+  }
+
+  function appendSystemMsg(text) {
+    var log = document.getElementById('msg-log');
+    var placeholder = log.querySelector('.no-msgs');
+    if (placeholder) placeholder.remove();
+    var div = document.createElement('div');
+    div.className = 'msg system';
+    var ts = new Date().toLocaleTimeString();
+    div.textContent = ts + ' — ' + text;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
   }
 
   function startDm(peer) {

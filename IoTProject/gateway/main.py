@@ -88,7 +88,7 @@ def main():  # wires up all components and starts the flask web server
 
     def on_ble_connect(connected):
         """Publish MQTT presence when a BLE client connects/disconnects."""
-        if not args.mqtt:
+        if not args.mqtt or mqtt_bridge._client is None:
             return
         import json, time
         topic = "mesh/presence/BLE-device"
@@ -97,7 +97,11 @@ def main():  # wires up all components and starts the flask web server
             "username": "BLE-device",
             "ts": time.time(),
         })
-        mqtt_bridge._client.publish(topic, payload, qos=0)
+        try:
+            mqtt_bridge._client.publish(topic, payload, qos=0)
+            logger.info("BLE device %s — published to MQTT", "connected" if connected else "disconnected")
+        except Exception:
+            logger.warning("Could not publish BLE presence to MQTT")
 
     if args.bluetooth:
         bt_server.start(

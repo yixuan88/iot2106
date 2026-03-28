@@ -295,17 +295,20 @@ def get_latency_samples() -> list:
 def _on_dbus_message(msg):
     """Handle D-Bus signals from BlueZ to detect BLE client connect/disconnect."""
     global _client_count
-    if msg.message_type.name != "SIGNAL":
+    try:
+        # Filter for PropertiesChanged signals only
+        if msg.member != "PropertiesChanged":
+            return False
+        args = msg.body
+        if not args or len(args) < 2 or args[0] != "org.bluez.Device1":
+            return False
+        changed = args[1]
+        if "Connected" not in changed:
+            return False
+        val = changed["Connected"]
+        connected = val.value if hasattr(val, "value") else bool(val)
+    except Exception:
         return False
-    if msg.member != "PropertiesChanged":
-        return False
-    args = msg.body
-    if len(args) < 2 or args[0] != "org.bluez.Device1":
-        return False
-    changed = args[1]
-    if "Connected" not in changed:
-        return False
-    connected = changed["Connected"].value
     if connected:
         _client_count += 1
         logger.info("BLE client connected (total: %d)", _client_count)
@@ -364,13 +367,6 @@ async def _serve_with_restart():
 
 async def _setup_and_serve():
     global _nus_service, _advert, _bus, _adapter
-
-    # Power-cycle the adapter to clear any stale advertisements from previous runs
-    logger.info("BLE: power-cycling adapter to clear stale state")
-    subprocess.run(["bluetoothctl"], input=b"power off\n", capture_output=True, timeout=6)
-    await asyncio.sleep(2)
-    subprocess.run(["bluetoothctl"], input=b"power on\npairable on\n", capture_output=True, timeout=6)
-    await asyncio.sleep(2)
 
     bus = await get_message_bus()
     _bus = bus

@@ -145,7 +145,7 @@ void redraw() {
     // Row 2: controls
     M5.Lcd.setCursor(0, SCREEN_H - 16);
     M5.Lcd.setTextColor(YELLOW, BLACK);
-    M5.Lcd.print("[A]Send [B]Next [A+B]Ping");
+    M5.Lcd.print("[A]Send [B]Next [Hold A]Ping");
 
     // Row 3: current preset
     M5.Lcd.setCursor(0, SCREEN_H - 8);
@@ -309,18 +309,19 @@ void loop() {
 
     if (!isConnected) return;
 
-    // ── Both buttons pressed — BLE latency ping ────────────────────────────
-    if (M5.BtnA.wasPressed() && M5.BtnB.isPressed()) {
+    // ── Long press Button A (>800ms) — BLE latency ping ──────────────────
+    if (M5.BtnA.pressedFor(800)) {
         if (pRxChar && pingTimestamp == 0) {
             pingTimestamp = millis();
             String ping = "PING:" + String(pingTimestamp) + "\n";
             pRxChar->writeValue((uint8_t*)ping.c_str(), ping.length(), false);
             pushLine("[ping sent]");
         }
-        return;  // don't also send preset
+        while (M5.BtnA.isPressed()) { M5.update(); delay(20); }  // wait for release
+        return;
     }
 
-    // ── Button A — send selected preset ────────────────────────────────────
+    // ── Button A (short press) — send selected preset ─────────────────────
     if (M5.BtnA.wasPressed()) {
         String msg = String(PRESETS[presetIdx]);
         if (pRxChar) {

@@ -32,7 +32,7 @@
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 // Fallback name if no beacon found (must match bt_server.py advertisement).
-#define GATEWAY_BLE_NAME  "GatewayBLE"
+#define GATEWAY_BLE_NAME  "GatewayBLE-1"
 
 // Nordic UART Service UUIDs (lowercase required by ESP32 BLE library)
 #define NUS_SERVICE_UUID  "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -91,6 +91,8 @@ int      reconAttempt = 0;
 // Latency measurement
 unsigned long pingTimestamp = 0;
 int           lastRttMs     = -1;  // -1 = no measurement yet
+bool          sendRttReport = false;  // flag to send RTT back to Pi from loop()
+bool          longPressHandled = false;  // prevent short press after long press
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -145,7 +147,7 @@ void redraw() {
     // Row 2: controls
     M5.Lcd.setCursor(0, SCREEN_H - 16);
     M5.Lcd.setTextColor(YELLOW, BLACK);
-    M5.Lcd.print("[A]Send [B]Next [A+B]Ping");
+    M5.Lcd.print("[A]Send [Hold A]Ping [B]Next");
 
     // Row 3: current preset
     M5.Lcd.setCursor(0, SCREEN_H - 8);
@@ -174,11 +176,7 @@ static void notifyCallback(BLERemoteCharacteristic* pChar,
         if (sent == pingTimestamp) {
             lastRttMs = (int)(millis() - pingTimestamp);
             pingTimestamp = 0;
-            // Send RTT result back to Pi so web UI can display it
-            if (pRxChar) {
-                String rttMsg = "BLRTT:" + String(lastRttMs) + "\n";
-                pRxChar->writeValue((uint8_t*)rttMsg.c_str(), rttMsg.length(), false);
-            }
+            sendRttReport = true;  // defer BLE write to loop() — can't write from callback
             redraw();
             return;
         }
@@ -314,19 +312,31 @@ void loop() {
 
     if (!isConnected) return;
 
-    // ── Both buttons pressed — BLE latency ping ────────────────────────────
-    if (M5.BtnA.isPressed() && M5.BtnB.wasPressed()) {
+    // ── Send deferred RTT report (set by notifyCallback) ──────────────────
+    if (sendRttReport && pRxChar && lastRttMs >= 0) {
+        sendRttReport = false;
+        String rttMsg = "BLRTT:" + String(lastRttMs) + "\n";
+        pRxChar->writeValue((uint8_t*)rttMsg.c_str(), rttMsg.length(), false);
+    }
+
+    // ── Long press A (>1s) — BLE latency ping ───────────────────────────────
+    if (M5.BtnA.pressedFor(1000) && !longPressHandled) {
+        longPressHandled = true;
         if (pRxChar && pingTimestamp == 0) {
             pingTimestamp = millis();
             String ping = "PING:" + String(pingTimestamp) + "\n";
             pRxChar->writeValue((uint8_t*)ping.c_str(), ping.length(), false);
             pushLine("[ping sent]");
         }
-        return;  // don't also send preset or cycle
     }
 
-    // ── Button A — send selected preset ───────────────────────────────────
-    if (M5.BtnA.wasPressed()) {
+    // ── Reset long press flag when A is released ──────────────────────────
+    if (M5.BtnA.wasReleased()) {
+        if (longPressHandled) {
+            longPressHandled = false;
+            return;  // skip short press action after long press
+        }
+        // ── Short press A — send selected preset ──────────────────────────
         String msg = String(PRESETS[presetIdx]);
         if (pRxChar) {
             String toSend = msg + "\n";

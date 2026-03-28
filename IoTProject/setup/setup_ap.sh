@@ -11,12 +11,12 @@ SSID="MeshGateway-$(hostname)"
 PASSPHRASE="${PASSPHRASE:-password}"
 STATIC_IP="192.168.4.1"
 
-echo "==> Installing hostapd and dnsmasq"
+echo "==> Installing hostapd, dnsmasq, and mosquitto"
 apt-get update -qq
-apt-get install -y hostapd dnsmasq
+apt-get install -y hostapd dnsmasq mosquitto
 
 echo "==> Stopping services before configuration"
-systemctl stop hostapd dnsmasq || true
+systemctl stop hostapd dnsmasq mosquitto || true
 systemctl unmask hostapd
 
 echo "==> Unmanaging wlan0 from NetworkManager"
@@ -57,6 +57,16 @@ echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' > /etc/default/hostapd
 echo "==> Writing dnsmasq config"
 cp "$SCRIPT_DIR/dnsmasq.conf" /etc/dnsmasq.conf
 
+echo "==> Writing Mosquitto config"
+cp "$SCRIPT_DIR/mosquitto.conf" /etc/mosquitto/conf.d/gateway.conf
+
+echo "==> Downloading MQTT.js for browser clients"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+mkdir -p "$PROJECT_DIR/gateway/static"
+wget -q -O "$PROJECT_DIR/gateway/static/mqtt.min.js" \
+  "https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js" \
+  || echo "WARNING: Could not download mqtt.min.js — download it manually to gateway/static/mqtt.min.js"
+
 echo "==> Disabling WiFi power management (prevents BLE interference)"
 iw dev wlan0 set power_save off 2>/dev/null || true
 # Persist across reboots via a systemd drop-in
@@ -70,8 +80,8 @@ echo "==> Unblocking Bluetooth"
 rfkill unblock bluetooth
 
 echo "==> Enabling and starting services"
-systemctl enable hostapd dnsmasq bluetooth
-systemctl start bluetooth hostapd dnsmasq
+systemctl enable hostapd dnsmasq bluetooth mosquitto
+systemctl start bluetooth hostapd dnsmasq mosquitto
 
 echo ""
 echo "=============================="
@@ -79,5 +89,6 @@ echo " WiFi AP configured"
 echo " SSID     : $SSID"
 echo " Password : $PASSPHRASE"
 echo " Gateway  : http://${STATIC_IP}:5000"
+echo " MQTT WS  : ws://${STATIC_IP}:9001"
 echo "=============================="
 echo "(Save the password above — it is not stored anywhere else)"

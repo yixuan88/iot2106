@@ -13,6 +13,7 @@ HEADER_SIZE = 16
 CHUNK_TOTAL_SIZE = HEADER_SIZE + CHUNK_DATA_SIZE
 MAX_FILE_SIZE = 50 * 1024
 INTER_CHUNK_DELAY = 0.5
+META_SEQ = 0xFFFFFFFF
 
 
 def _pack_header(transfer_id, seq_num, total_chunks, crc32):
@@ -24,15 +25,16 @@ def _unpack_header(data):
 
 
 class FileTransfer:
-    def __init__(self, send_chunk_fn, on_progress_fn=None):  # stores the chunk sender and sets up send/receive tracking dicts
+    def __init__(self, send_chunk_fn, on_progress_fn=None, on_complete_fn=None):  # stores the chunk sender and sets up send/receive tracking dicts
         self._send_chunk = send_chunk_fn
         self._on_progress = on_progress_fn or (lambda *a, **kw: None)
+        self._on_complete = on_complete_fn or (lambda d: None)
         self._lock = threading.Lock()
         self._send_progress = {}
         self._recv_buffers = {}
         self._completed = {}
 
-    def send_file(self, file_bytes, filename, destination="^all"):  # validates file size, splits into chunks and starts a background send thread
+    def send_file(self, file_bytes, filename, destination="^all", username="unknown"):  # validates file size, splits into chunks, and starts a background send thread
         if len(file_bytes) > MAX_FILE_SIZE:
             raise ValueError(
                 f"File size {len(file_bytes)} bytes exceeds max {MAX_FILE_SIZE}"
@@ -49,18 +51,33 @@ class FileTransfer:
                 "sent_chunks": 0,
                 "status": "sending",
                 "direction": "tx",
+                "from": username,
+                "source": "local",
             }
 
         thread = threading.Thread(
             target=self._send_worker,
-            args=(transfer_id, file_bytes, total_chunks, destination),
+            args=(transfer_id, file_bytes, total_chunks, destination, filename, username),
             daemon=True,
         )
         thread.start()
         return transfer_id
 
-    def _send_worker(self, transfer_id, file_bytes, total_chunks, destination):  # sends each chunk sequentially with a delay between them
+    def _send_worker(self, transfer_id, file_bytes, total_chunks, destination, filename, username="unknown"):  # sends each chunk sequentially with a delay between them
         try:
+            username_bytes = username.encode("utf-8")[:16].ljust(16, b"\x00")
+            filename_encoded = filename.encode("utf-8")
+            max_filename_bytes = CHUNK_DATA_SIZE - 16
+            if len(filename_encoded) > max_filename_bytes:
+                logger.warning(
+                    "Filename truncated to %d bytes for transfer %d: %s",
+                    max_filename_bytes, transfer_id, filename,
+                )
+            filename_bytes = filename_encoded[:max_filename_bytes]
+            meta_payload = _pack_header(transfer_id, META_SEQ, total_chunks, 0) + username_bytes + filename_bytes
+            self._send_chunk(meta_payload, destination)
+            time.sleep(INTER_CHUNK_DELAY)
+
             for seq_num in range(total_chunks):
                 start = seq_num * CHUNK_DATA_SIZE
                 data = file_bytes[start : start + CHUNK_DATA_SIZE]
@@ -92,12 +109,31 @@ class FileTransfer:
             with self._lock:
                 self._send_progress[transfer_id]["status"] = "error"
 
-    def receive_chunk(self, payload_bytes):  # buffers the chunk and assembles the file once all chunks are received
+    def receive_chunk(self, payload_bytes):  # validates crc, buffers the chunk, and assembles the file once all chunks are received
         if len(payload_bytes) < HEADER_SIZE:
             logger.warning("Received chunk too short (%d bytes)", len(payload_bytes))
             return None
 
         transfer_id, seq_num, total_chunks, expected_crc = _unpack_header(payload_bytes)
+
+        if seq_num == META_SEQ:
+            sender_username = payload_bytes[HEADER_SIZE:HEADER_SIZE + 16].rstrip(b"\x00").decode("utf-8", errors="replace")
+            filename = payload_bytes[HEADER_SIZE + 16:].decode("utf-8", errors="replace")
+            with self._lock:
+                if transfer_id not in self._recv_buffers:
+                    self._recv_buffers[transfer_id] = {
+                        "total_chunks": total_chunks,
+                        "chunks": {},
+                        "status": "receiving",
+                        "direction": "rx",
+                        "filename": filename,
+                        "from": sender_username,
+                    }
+                else:
+                    self._recv_buffers[transfer_id]["filename"] = filename
+                    self._recv_buffers[transfer_id]["from"] = sender_username
+            return None
+
         data = payload_bytes[HEADER_SIZE:]
         actual_crc = zlib.crc32(data) & 0xFFFFFFFF
 
@@ -139,12 +175,20 @@ class FileTransfer:
                     "status": "done",
                     "direction": "rx",
                     "total_chunks": total_chunks,
+                    "filename": buf.get("filename", f"transfer_{transfer_id}.bin"),
+                    "from": buf.get("from", "unknown"),
+                    "source": "mesh",
                 }
                 self._completed[transfer_id] = completed
                 del self._recv_buffers[transfer_id]
+                if len(self._completed) > 20:
+                    oldest_key = next(iter(self._completed))
+                    del self._completed[oldest_key]
                 logger.info(
-                    "Assembled transfer %d (%d bytes)", transfer_id, len(assembled)
+                    "Assembled transfer %d (%d bytes) from %s",
+                    transfer_id, len(assembled), completed["from"],
                 )
+                self._on_complete(completed)
                 return completed
 
         return None
@@ -166,7 +210,7 @@ class FileTransfer:
                 return dict(self._completed[transfer_id])
         return None
 
-    def list_received(self):
+    def list_received(self):  # returns metadata for all completed inbound transfers without the raw bytes
         with self._lock:
             return [
                 {k: v for k, v in entry.items() if k != "data"}
@@ -179,4 +223,11 @@ class FileTransfer:
             entry = self._completed.get(transfer_id)
             if entry and entry["direction"] == "rx":
                 return entry["data"]
+        return None
+
+    def get_received_filename(self, transfer_id):  # returns the original filename of a completed inbound transfer
+        with self._lock:
+            entry = self._completed.get(transfer_id)
+            if entry and entry["direction"] == "rx":
+                return entry.get("filename", f"transfer_{transfer_id}.bin")
         return None

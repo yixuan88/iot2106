@@ -14,6 +14,11 @@ _device = None
 MAX_CHUNK_PAYLOAD = 200
 _BLE_RECONNECT_INTERVAL = 5
 
+# Serial RTT measurement
+_serial_rtt_samples: list = []
+_serial_rtt_lock = threading.Lock()
+MAX_SERIAL_SAMPLES = 50
+
 
 def connect(device=None, transport="serial"):  # opens a serial or BLE connection to the LoRa32 and subscribes to incoming packets
     global _interface, _transport, _device
@@ -115,6 +120,39 @@ def get_node_info():  # returns a list of all known remote peer nodes, excluding
             }
         )
     return result
+
+
+def measure_serial_rtt(count=3):
+    """Measure RPi ↔ local ESP32 serial round-trip time.
+
+    Sends an admin metadata request to the local node and times the response.
+    No radio transmission — pure serial/USB measurement.
+    """
+    if not _interface:
+        return []
+    results = []
+    for _ in range(count):
+        t0 = time.perf_counter()
+        try:
+            try:
+                _interface.localNode.getMetadata()
+            except AttributeError:
+                _interface.getMyNodeInfo()
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            results.append(round(elapsed_ms, 2))
+        except Exception as e:
+            logger.warning("Serial RTT probe failed: %s", e)
+        time.sleep(0.2)
+    with _serial_rtt_lock:
+        _serial_rtt_samples.extend(results)
+        _serial_rtt_samples[:] = _serial_rtt_samples[-MAX_SERIAL_SAMPLES:]
+    return results
+
+
+def get_serial_rtt_samples():
+    """Return stored serial RTT measurements."""
+    with _serial_rtt_lock:
+        return list(_serial_rtt_samples)
 
 
 def _on_receive(packet, interface):  # dispatches every incoming packet to all registered callbacks

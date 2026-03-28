@@ -6,6 +6,8 @@ from gateway.message_store import MessageStore
 from gateway.file_transfer import FileTransfer
 from gateway import mesh_interface
 from gateway import bt_server
+from gateway import mqtt_bridge
+from gateway import latency
 from gateway.web_server import create_app
 
 logging.basicConfig(
@@ -41,18 +43,30 @@ def main():  # wires up all components and starts the flask web server
         default=False,
         help="Enable BLE NUS (Nordic UART Service) peripheral so a phone/M5Stick can send/receive mesh messages over Bluetooth",
     )
+    parser.add_argument(
+        "--mqtt",
+        action="store_true",
+        default=False,
+        help="Enable MQTT bridge for WiFi chat clients (requires mosquitto broker)",
+    )
     args = parser.parse_args()
 
     store = MessageStore()
-    ft = FileTransfer(send_chunk_fn=mesh_interface.send_chunk)
+    ft = FileTransfer(
+        send_chunk_fn=mesh_interface.send_chunk,
+        on_complete_fn=mqtt_bridge.publish_file_notification if args.mqtt else None,
+    )
 
     def on_packet(packet):  # routes incoming mesh packets to the message store or file transfer handler
         decoded = packet.get("decoded", {})
         port_num = decoded.get("portnum")
 
         if port_num == "TEXT_MESSAGE_APP" or port_num == TEXT_MESSAGE_APP:
-            sender = packet.get("fromId", "unknown")
             text = decoded.get("text", "")
+            # Intercept latency probes before normal processing
+            if latency.handle_mesh_text(text):
+                return
+            sender = packet.get("fromId", "unknown")
             rx_rssi = packet.get("rxRssi")
             rx_snr = packet.get("rxSnr")
             store.add(sender, text, rssi=rx_rssi, snr=rx_snr)
@@ -75,7 +89,7 @@ def main():  # wires up all components and starts the flask web server
     if args.bluetooth:
         bt_server.start(
             on_message_fn=lambda text: mesh_interface.send_text(text),
-            on_text_fn=None,  # Teammate: wire to mqtt_bridge.publish() here
+            on_text_fn=(lambda text: mqtt_bridge.publish_text(text)) if args.mqtt else None,
         )
 
     mesh_connected = False
@@ -92,6 +106,9 @@ def main():  # wires up all components and starts the flask web server
     # Update BLE beacon with mesh connection status
     if args.bluetooth:
         bt_server.set_mesh_connected(mesh_connected)
+
+    if args.mqtt:
+        mqtt_bridge.start()
 
     app = create_app(store, ft)
     logger.info("Starting web server on %s:%d", HOST, PORT)

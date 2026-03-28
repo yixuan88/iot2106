@@ -23,7 +23,7 @@ nmcli connection add \
   connection.autoconnect yes
 
 echo "==> Stopping AP services"
-systemctl stop hostapd dnsmasq gateway wlan0-static || true
+systemctl stop hostapd dnsmasq mosquitto gateway wlan0-static || true
 for svc in hostapd dnsmasq wlan0-static; do
   timeout 5 systemctl disable --no-reload "$svc" 2>/dev/null || true
 done

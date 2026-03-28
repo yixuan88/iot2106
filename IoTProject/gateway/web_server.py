@@ -5,6 +5,7 @@ import io
 
 from gateway import mesh_interface
 from gateway import bt_server
+from gateway import latency
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +63,10 @@ def create_app(store, file_transfer):
         if f.filename == "":
             abort(400, "No file selected")
         destination = request.form.get("destination", "^all")
+        username = request.form.get("username", "unknown")
         file_bytes = f.read()
         try:
-            transfer_id = file_transfer.send_file(file_bytes, f.filename, destination)
+            transfer_id = file_transfer.send_file(file_bytes, f.filename, destination, username=username)
         except ValueError as e:
             abort(400, str(e))
         return jsonify({"transfer_id": transfer_id}), 202
@@ -85,11 +87,12 @@ def create_app(store, file_transfer):
         data = file_transfer.get_received_data(transfer_id)
         if data is None:
             abort(404, "Transfer not found or not yet complete")
+        filename = file_transfer.get_received_filename(transfer_id) or f"transfer_{transfer_id}.bin"
         return send_file(
             io.BytesIO(data),
             mimetype="application/octet-stream",
             as_attachment=True,
-            download_name=f"transfer_{transfer_id}.bin",
+            download_name=filename,
         )
 
     # ── BLE status & latency endpoints ──────────────────────────────────────
@@ -103,10 +106,21 @@ def create_app(store, file_transfer):
         return jsonify({"pong": True, "server_time": time.time()})
 
     @app.route("/api/latency", methods=["GET"])
-    def latency():
-        return jsonify({
-            "ble_rtt_samples": bt_server.get_latency_samples(),
-            "ble_status": bt_server.get_status(),
-        })
+    def latency_all():
+        return jsonify(latency.get_all())
+
+    @app.route("/api/latency/serial", methods=["POST"])
+    def latency_serial():
+        body = request.get_json(silent=True) or {}
+        count = min(max(int(body.get("count", 3)), 1), 10)
+        samples = mesh_interface.measure_serial_rtt(count)
+        return jsonify({"samples": samples, "avg": round(sum(samples) / len(samples), 2) if samples else None})
+
+    @app.route("/api/latency/mesh-ping", methods=["POST"])
+    def latency_mesh_ping():
+        ping_id = latency.send_mesh_ping()
+        if ping_id is None:
+            return jsonify({"error": "No mesh connection"}), 503
+        return jsonify({"ping_id": ping_id, "status": "sent"})
 
     return app

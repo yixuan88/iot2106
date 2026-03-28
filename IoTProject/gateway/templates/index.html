@@ -8,387 +8,756 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #f0f2f5; color: #1a1a1a; }
 
+    /* ── Username gate ── */
+    #gate {
+      position: fixed; inset: 0; background: #1a73e8;
+      display: flex; align-items: center; justify-content: center; z-index: 100;
+    }
+    #gate .box {
+      background: #fff; border-radius: 12px; padding: 32px 28px;
+      max-width: 340px; width: 100%; box-shadow: 0 8px 32px rgba(0,0,0,.2);
+    }
+    #gate h2 { font-size: 1.2rem; margin-bottom: 8px; }
+    #gate p  { font-size: 0.85rem; color: #555; margin-bottom: 16px; line-height: 1.5; }
+    #gate input {
+      width: 100%; padding: 10px 12px; font-size: 1rem;
+      border: 1px solid #ccc; border-radius: 6px; margin-bottom: 6px;
+    }
+    #gate input:focus { outline: 2px solid #1a73e8; border-color: transparent; }
+    #gate-error { font-size: 0.8rem; color: #d93025; min-height: 1.2em; margin-bottom: 10px; }
+    #gate button {
+      width: 100%; padding: 10px; background: #1a73e8; color: #fff;
+      border: none; border-radius: 6px; font-size: 1rem; cursor: pointer;
+    }
+    #gate button:hover { background: #1557b0; }
+
+    /* ── App shell ── */
+    #app { display: none; flex-direction: column; height: 100dvh; }
+
     header {
-      background: #1a73e8; color: #fff; padding: 12px 20px;
-      display: flex; align-items: center; justify-content: space-between;
+      background: #1a73e8; color: #fff; padding: 10px 16px;
+      display: flex; align-items: center; gap: 10px; flex-shrink: 0;
     }
-    header h1 { font-size: 1.1rem; font-weight: 600; }
-    #node-bar { font-size: 0.8rem; opacity: 0.85; }
-
-    main { max-width: 800px; margin: 24px auto; padding: 0 16px; display: grid; gap: 20px; }
-
-    .card {
-      background: #fff; border-radius: 8px;
-      box-shadow: 0 1px 4px rgba(0,0,0,.12); padding: 16px;
+    header h1 { font-size: 1rem; font-weight: 600; flex: 1; }
+    #header-right { font-size: 0.78rem; opacity: 0.9; text-align: right; }
+    #conn-dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: #fbbc04; margin-right: 4px; vertical-align: middle;
     }
-    .card h2 { font-size: 0.95rem; font-weight: 600; margin-bottom: 12px; color: #444; }
+    #conn-dot.ok { background: #34a853; }
+    #conn-dot.err { background: #ea4335; }
 
-    #message-log {
-      height: 320px; overflow-y: auto;
-      border: 1px solid #e0e0e0; border-radius: 6px;
-      padding: 10px; display: flex; flex-direction: column; gap: 8px;
+    /* ── Topic bar ── */
+    #topic-bar {
+      background: #fff; border-bottom: 1px solid #e0e0e0;
+      display: flex; align-items: center; gap: 4px;
+      padding: 0 12px; overflow-x: auto; flex-shrink: 0;
     }
-    .msg { max-width: 75%; padding: 8px 12px; border-radius: 14px; font-size: 0.88rem; line-height: 1.4; }
-    .msg.rx { background: #e9ecef; align-self: flex-start; }
-    .msg.tx { background: #1a73e8; color: #fff; align-self: flex-end; }
-    .msg .meta { font-size: 0.72rem; opacity: 0.65; margin-top: 4px; }
+    .topic-tab {
+      padding: 10px 14px; font-size: 0.85rem; cursor: pointer;
+      border-bottom: 3px solid transparent; white-space: nowrap;
+      color: #555; user-select: none;
+    }
+    .topic-tab.active { border-color: #1a73e8; color: #1a73e8; font-weight: 600; }
+    #join-btn, #dm-btn {
+      padding: 6px 10px; margin-left: 4px;
+      border-radius: 14px; font-size: 0.82rem; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    }
+    #join-btn { background: #e8f0fe; border: 1px solid #c5d8fb; color: #174ea6; }
+    #dm-btn   { background: #fce8e6; border: 1px solid #f4b8b4; color: #c5221f; }
 
-    form { display: flex; flex-direction: column; gap: 10px; }
-    input[type=text], select {
-      padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 1rem;
-      width: 100%; min-height: 44px;
+    /* ── Message log ── */
+    #msg-log {
+      flex: 1; overflow-y: auto; padding: 12px 16px;
+      display: flex; flex-direction: column; gap: 8px;
     }
-    button {
+    .msg { max-width: 78%; padding: 8px 12px; border-radius: 14px; font-size: 0.88rem; line-height: 1.45; }
+    .msg.rx    { background: #e9ecef; align-self: flex-start; }
+    .msg.tx    { background: #1a73e8; color: #fff; align-self: flex-end; }
+    .msg.dm-rx { background: #fce8e6; align-self: flex-start; }
+    .msg.dm-tx { background: #e6f4ea; align-self: flex-end; }
+    .msg .meta { font-size: 0.7rem; opacity: 0.65; margin-top: 4px; }
+    .msg .badge {
+      display: inline-block; font-size: 0.65rem; font-weight: 700;
+      background: rgba(0,0,0,.12); border-radius: 8px; padding: 1px 6px; margin-bottom: 3px;
+    }
+    .no-msgs { color: #aaa; font-size: 0.85rem; text-align: center; margin: auto; }
+
+    /* ── Send bar ── */
+    #send-bar {
+      background: #fff; border-top: 1px solid #e0e0e0;
+      padding: 10px 12px; display: flex; gap: 8px; align-items: center; flex-shrink: 0;
+    }
+    #msg-input {
+      flex: 1; padding: 8px 12px; border: 1px solid #ccc; border-radius: 20px;
+      font-size: 0.95rem; min-height: 40px;
+    }
+    #msg-input:focus { outline: 2px solid #1a73e8; border-color: transparent; }
+    #dest-select {
+      padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.85rem;
+    }
+    #send-btn {
       padding: 8px 18px; background: #1a73e8; color: #fff;
-      border: none; border-radius: 6px; font-size: 0.9rem; cursor: pointer;
+      border: none; border-radius: 20px; font-size: 0.9rem; cursor: pointer; white-space: nowrap;
     }
-    button:disabled { background: #90b8f0; cursor: not-allowed; }
-    .row { display: flex; gap: 8px; align-items: center; }
-    .row input[type=text] { flex: 1; }
-    .row select { width: auto; }
+    #send-btn:disabled { background: #90b8f0; cursor: not-allowed; }
 
-    progress { width: 100%; height: 14px; border-radius: 6px; appearance: none; margin-top: 6px; }
-    progress::-webkit-progress-bar { background: #e0e0e0; border-radius: 6px; }
-    progress::-webkit-progress-value { background: #1a73e8; border-radius: 6px; }
+    /* ── Cards ── */
+    .section { background: #fff; border-top: 1px solid #e0e0e0; padding: 12px 16px; flex-shrink: 0; }
+    .section-header {
+      font-size: 0.8rem; font-weight: 600; color: #666; text-transform: uppercase;
+      letter-spacing: 0.05em; margin-bottom: 8px;
+    }
 
-    #transfer-status { font-size: 0.83rem; color: #555; margin-top: 4px; min-height: 1.2em; }
+    /* Presence */
+    #presence-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .presence-chip {
+      background: #e6f4ea; border: 1px solid #81c995; color: #1e6e3a;
+      border-radius: 12px; padding: 3px 10px; font-size: 0.8rem; cursor: pointer;
+    }
+    .presence-chip:hover { background: #d4edda; }
 
-    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; }
+    /* File transfer */
+    #file-section form { display: flex; flex-direction: column; gap: 8px; }
+    #file-section input[type=file] { font-size: 0.85rem; }
+    #file-send-btn {
+      padding: 7px 14px; background: #1a73e8; color: #fff;
+      border: none; border-radius: 6px; font-size: 0.85rem; cursor: pointer; align-self: flex-start;
+    }
+    #file-send-btn:disabled { background: #90b8f0; cursor: not-allowed; }
+    progress { width: 100%; height: 10px; border-radius: 5px; appearance: none; margin-top: 4px; }
+    progress::-webkit-progress-bar { background: #e0e0e0; border-radius: 5px; }
+    progress::-webkit-progress-value { background: #1a73e8; border-radius: 5px; }
+    #xfer-status { font-size: 0.8rem; color: #555; min-height: 1.1em; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 8px; }
+    th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid #eee; }
     th { color: #666; font-weight: 600; }
     a.dl { color: #1a73e8; text-decoration: none; }
     a.dl:hover { text-decoration: underline; }
 
-    #node-list { font-size: 0.82rem; display: flex; flex-wrap: wrap; gap: 8px; }
+    /* Nodes */
+    #node-list { display: flex; flex-wrap: wrap; gap: 6px; }
     .node-chip {
-      background: #e8f0fe; border-radius: 12px; padding: 4px 10px;
-      border: 1px solid #c5d8fb; color: #174ea6;
-    }
-    .node-chip.local {
-      background: #e6f4ea; border-color: #81c995; color: #1e6e3a;
-    }
-    .node-chip .local-tag {
-      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.04em; opacity: 0.8; display: block;
+      background: #e8f0fe; border: 1px solid #c5d8fb; color: #174ea6;
+      border-radius: 12px; padding: 3px 10px; font-size: 0.8rem;
     }
 
-    @media (max-width: 500px) {
-      #send-form .row { flex-wrap: wrap; }
-      #send-form .row input[type=text] { flex: 1 1 100%; min-height: 44px; font-size: 1rem; }
-      #send-form .row select { flex: 1; }
-      #send-form .row button { white-space: nowrap; }
+    .lat-btn {
+      padding: 2px 10px; font-size: 0.75rem; background: #1a73e8; color: #fff;
+      border: none; border-radius: 4px; cursor: pointer;
+    }
+    .lat-btn:disabled { background: #90b8f0; cursor: not-allowed; }
+
+    @media (max-width: 480px) {
+      #send-bar { flex-wrap: wrap; }
+      #dest-select { width: 100%; }
     }
   </style>
 </head>
 <body>
 
-<header>
-  <h1>Mesh Gateway</h1>
-  <div id="node-bar">
-    <div id="local-node-label" style="font-size:0.75rem;opacity:0.75;">Connecting…</div>
-    <div id="peer-count"></div>
+<!-- Username gate -->
+<div id="gate">
+  <div class="box">
+    <h2>Join the mesh</h2>
+    <p>Choose a username to identify yourself on this network. You cannot change it without clearing your browser data.</p>
+    <input type="text" id="gate-input" maxlength="16" placeholder="e.g. alice" autocomplete="off" spellcheck="false" />
+    <div id="gate-error"></div>
+    <button id="gate-btn">Connect</button>
   </div>
-</header>
+</div>
 
-<main>
-  <div class="card">
-    <h2>Known Nodes</h2>
-    <div id="node-list">—</div>
+<!-- Main app -->
+<div id="app">
+  <header>
+    <h1>Mesh Gateway <span id="username-chip" style="font-weight:400;opacity:.85;"></span></h1>
+    <div id="header-right">
+      <span id="conn-dot"></span><span id="conn-label">connecting…</span>
+      <div id="local-node-label" style="opacity:.8;"></div>
+    </div>
+  </header>
+
+  <div id="topic-bar">
+    <button id="join-btn">+ Join topic</button>
+    <button id="dm-btn">+ DM</button>
   </div>
 
-  <div class="card">
-    <h2>Latency &amp; BLE Status</h2>
-    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.85rem;">
-      <div>
-        <strong>WiFi RTT:</strong> <span id="wifi-rtt">—</span>
-        <button onclick="measureWifiPing()" style="margin-left:6px;padding:2px 10px;font-size:0.8rem;">Ping</button>
-      </div>
-      <div><strong>BLE RTT:</strong> <span id="ble-rtt">—</span></div>
-      <div><strong>BLE Clients:</strong> <span id="ble-clients">—</span></div>
-      <div><strong>Gateway ID:</strong> <span id="ble-gw-id">—</span></div>
-      <div><strong>Mesh:</strong> <span id="ble-mesh">—</span></div>
+  <div id="msg-log">
+    <div class="no-msgs">No messages yet</div>
+  </div>
+
+  <div id="send-bar">
+    <input type="text" id="msg-input" placeholder="Type a message…" autocomplete="off" />
+    <button id="send-btn">Send</button>
+  </div>
+
+  <div class="section">
+    <div class="section-header">Online on this router</div>
+    <div id="presence-list"><span style="color:#aaa;font-size:.82rem;">No one else here yet</span></div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">Hop-by-Hop Latency</div>
+    <table id="latency-table" style="font-size:0.82rem;margin-bottom:8px;">
+      <thead><tr><th>Hop</th><th>Path</th><th>Last</th><th>Avg</th><th>Min</th><th>Max</th><th>n</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td>1</td><td>WiFi (Browser ↔ RPi)</td>
+          <td id="wifi-last">—</td><td id="wifi-avg">—</td><td id="wifi-min">—</td><td id="wifi-max">—</td><td id="wifi-n">0</td>
+          <td><button onclick="measureWifiPing()" class="lat-btn">Ping</button></td>
+        </tr>
+        <tr>
+          <td>2</td><td>BLE (M5StickC ↔ RPi)</td>
+          <td id="ble-last">—</td><td id="ble-avg">—</td><td id="ble-min">—</td><td id="ble-max">—</td><td id="ble-n">0</td>
+          <td><span style="font-size:0.7rem;color:#888;">via M5 btn</span></td>
+        </tr>
+        <tr>
+          <td>3</td><td>Serial (RPi ↔ ESP32 USB)</td>
+          <td id="serial-last">—</td><td id="serial-avg">—</td><td id="serial-min">—</td><td id="serial-max">—</td><td id="serial-n">0</td>
+          <td><button onclick="measureSerial()" class="lat-btn">Measure</button></td>
+        </tr>
+        <tr>
+          <td>4</td><td>Mesh (RPi ↔ RPi full path)</td>
+          <td id="mesh-last">—</td><td id="mesh-avg">—</td><td id="mesh-min">—</td><td id="mesh-max">—</td><td id="mesh-n">0</td>
+          <td><button onclick="meshPing()" class="lat-btn">Ping</button></td>
+        </tr>
+        <tr style="color:#1a73e8;font-style:italic;">
+          <td>5</td><td>LoRa (derived: mesh − 2×serial)</td>
+          <td id="lora-last">—</td><td id="lora-avg">—</td><td id="lora-min">—</td><td id="lora-max">—</td><td id="lora-n">0</td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.82rem;color:#555;">
+      <span><strong>BLE Clients:</strong> <span id="ble-clients">—</span></span>
+      <span><strong>Gateway ID:</strong> <span id="ble-gw-id">—</span></span>
+      <span><strong>Mesh:</strong> <span id="ble-mesh">—</span></span>
     </div>
   </div>
 
-  <div class="card">
-    <h2>Messages</h2>
-    <div id="message-log"></div>
-    <form id="send-form" style="margin-top:14px;">
-      <div class="row">
-        <input type="text" id="msg-input" placeholder="Type a message…" autocomplete="off" required />
-        <select id="dest-select">
-          <option value="^all">Broadcast</option>
-        </select>
-        <button type="submit">Send</button>
-      </div>
-    </form>
-  </div>
-
-  <div class="card">
-    <h2>Send File</h2>
+  <div class="section" id="file-section">
+    <div class="section-header">File Transfer</div>
     <form id="file-form">
       <input type="file" id="file-input" required />
-      <div class="row" style="margin-top:6px;">
-        <select id="file-dest-select" style="max-width:180px;">
-          <option value="^all">Broadcast</option>
-        </select>
-        <button type="submit" id="file-send-btn">Upload &amp; Send</button>
-      </div>
+      <button type="submit" id="file-send-btn">Upload &amp; Send</button>
       <progress id="send-progress" value="0" max="1" style="display:none;"></progress>
-      <div id="transfer-status"></div>
+      <div id="xfer-status"></div>
     </form>
-  </div>
-
-  <div class="card">
-    <h2>Received Files</h2>
-    <table id="received-table">
-      <thead><tr><th>Transfer ID</th><th>Size</th><th>Chunks</th><th></th></tr></thead>
-      <tbody id="received-body"><tr><td colspan="4" style="color:#aaa;">None yet</td></tr></tbody>
+    <table id="recv-table" style="display:none;">
+      <thead><tr><th>File</th><th>From</th><th>Size</th><th></th></tr></thead>
+      <tbody id="recv-body"></tbody>
     </table>
   </div>
-</main>
 
+  <div class="section">
+    <div class="section-header">ESP32 Mesh Peers</div>
+    <div id="node-list"><span style="color:#aaa;font-size:.82rem;">Scanning…</span></div>
+  </div>
+</div>
+
+<script src="/static/mqtt.min.js"></script>
 <script>
-  let lastMsgId = 0;
-  let activeTransferId = null;
+  /* ── State ── */
+  let username = null;
+  let mqttClient = null;
+  let activeTopic = 'general';
+  let topics = ['general'];
+  let msgStore = { general: [] };
+  let dmStore = {};
+  let dmPeers = [];
   let progressPoller = null;
-  let localNode = null;
-  let peerNodes = [];
 
-  function formatTime(ts) {
-    return new Date(ts * 1000).toLocaleTimeString();
+  const VALID_USERNAME = /^[a-zA-Z0-9_-]{1,16}$/;
+
+  /* ── Gate ── */
+  document.getElementById('gate-btn').addEventListener('click', submitGate);
+  document.getElementById('gate-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitGate();
+  });
+
+  function submitGate() {
+    const val = document.getElementById('gate-input').value.trim();
+    const err = document.getElementById('gate-error');
+    if (!val) { err.textContent = 'Username cannot be empty.'; return; }
+    if (!VALID_USERNAME.test(val)) {
+      err.textContent = 'Letters, numbers, _ and - only (max 16 chars).';
+      return;
+    }
+    err.textContent = '';
+    username = val;
+    localStorage.setItem('mqttUsername', username);
+    document.getElementById('gate').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    startApp();
   }
 
-  function appendMessage(msg) {
-    const log = document.getElementById("message-log");
-    const div = document.createElement("div");
-    div.className = "msg " + msg.direction;
-    const meta = msg.direction === "rx"
-      ? `${msg.sender} · ${formatTime(msg.timestamp)}${msg.rssi != null ? " · RSSI " + msg.rssi : ""}`
-      : `You → ${msg.destination || "^all"} · ${formatTime(msg.timestamp)}`;
-    div.innerHTML = `<div>${escHtml(msg.text)}</div><div class="meta">${meta}</div>`;
-    log.appendChild(div);
+  /* ── Boot ── */
+  window.addEventListener('load', () => {
+    username = localStorage.getItem('mqttUsername');
+    if (username) {
+      document.getElementById('gate').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      startApp();
+    }
+  });
+
+  function startApp() {
+    document.getElementById('username-chip').textContent = '· ' + username;
+    renderTopicBar();
+    renderMsgLog();
+    connectMqtt();
+    loadLocalNode();
+    loadNodes();
+    loadLatency();
+    measureWifiPing();
+    setInterval(loadNodes, 15000);
+    setInterval(loadLatency, 5000);
+  }
+
+  /* ── MQTT ── */
+  function connectMqtt() {
+    const brokerUrl = 'ws://' + window.location.hostname + ':9001';
+    const clientId = 'browser_' + username + '_' + Math.random().toString(16).slice(2, 8);
+
+    mqttClient = mqtt.connect(brokerUrl, {
+      clientId: clientId,
+      clean: true,
+      keepalive: 30,
+      will: {
+        topic: 'mesh/presence/' + username,
+        payload: JSON.stringify({ status: 'offline', username: username }),
+        qos: 1,
+        retain: true,
+      },
+    });
+
+    mqttClient.on('connect', () => {
+      setConnStatus('ok', 'connected');
+      mqttClient.publish(
+        'mesh/presence/' + username,
+        JSON.stringify({ status: 'online', username: username, ts: Date.now() / 1000 }),
+        { qos: 1, retain: true }
+      );
+      resubscribeAll();
+    });
+
+    mqttClient.on('reconnect', () => setConnStatus('', 'reconnecting…'));
+    mqttClient.on('offline',   () => setConnStatus('err', 'offline'));
+    mqttClient.on('error', function(err) { console.error(err); setConnStatus('err', 'error'); });
+
+    mqttClient.on('message', function(topic, buf) {
+      var msg;
+      try { msg = JSON.parse(buf.toString()); } catch(e) { return; }
+
+      if (topic.indexOf('mesh/topic/') === 0) {
+        ingestTopicMsg(topic.slice('mesh/topic/'.length), msg);
+      } else if (topic.indexOf('mesh/dm/') === 0) {
+        ingestDm(msg);
+      } else if (topic.indexOf('mesh/presence/') === 0) {
+        handlePresence(topic.slice('mesh/presence/'.length), msg);
+      } else if (topic.indexOf('mesh/file/notify/') === 0) {
+        handleFileNotify(msg);
+      }
+    });
+
+    window.addEventListener('beforeunload', function() {
+      if (mqttClient) {
+        mqttClient.publish(
+          'mesh/presence/' + username,
+          JSON.stringify({ status: 'offline', username: username }),
+          { qos: 1, retain: true }
+        );
+      }
+    });
+  }
+
+  function resubscribeAll() {
+    topics.forEach(function(t) { mqttClient.subscribe('mesh/topic/' + t); });
+    mqttClient.subscribe('mesh/dm/' + username);
+    mqttClient.subscribe('mesh/presence/+');
+    mqttClient.subscribe('mesh/file/notify/+');
+  }
+
+  function setConnStatus(cls, label) {
+    var dot = document.getElementById('conn-dot');
+    dot.className = cls;
+    document.getElementById('conn-label').textContent = label;
+  }
+
+  /* ── Topics ── */
+  document.getElementById('join-btn').addEventListener('click', function() {
+    var name = prompt('Topic name (letters, numbers, _ - only):');
+    if (!name) return;
+    var clean = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    if (clean) joinTopic(clean);
+  });
+
+  document.getElementById('dm-btn').addEventListener('click', function() {
+    var name = prompt('Enter username to DM:');
+    if (!name) return;
+    var clean = name.trim();
+    if (clean) startDm(clean);
+  });
+
+  function joinTopic(name) {
+    if (topics.indexOf(name) === -1) {
+      topics.push(name);
+      msgStore[name] = [];
+      if (mqttClient && mqttClient.connected) mqttClient.subscribe('mesh/topic/' + name);
+    }
+    activeTopic = name;
+    renderTopicBar();
+    renderMsgLog();
+  }
+
+  function switchTopic(name) {
+    activeTopic = name;
+    renderTopicBar();
+    renderMsgLog();
+  }
+
+  function renderTopicBar() {
+    var bar = document.getElementById('topic-bar');
+    var joinBtn = document.getElementById('join-btn');
+    var dmBtn = document.getElementById('dm-btn');
+    bar.innerHTML = '';
+
+    topics.forEach(function(t) {
+      var tab = document.createElement('div');
+      tab.className = 'topic-tab' + (t === activeTopic ? ' active' : '');
+      tab.textContent = 'Topic: ' + t.charAt(0).toUpperCase() + t.slice(1);
+      tab.addEventListener('click', function() { switchTopic(t); });
+      bar.appendChild(tab);
+    });
+
+    dmPeers.forEach(function(peer) {
+      var key = 'dm:' + peer;
+      var tab = document.createElement('div');
+      tab.className = 'topic-tab' + (activeTopic === key ? ' active' : '');
+      tab.textContent = 'DM: ' + peer;
+      tab.addEventListener('click', function() { activeTopic = key; renderTopicBar(); renderMsgLog(); });
+      bar.appendChild(tab);
+    });
+
+    bar.appendChild(joinBtn);
+    bar.appendChild(dmBtn);
+  }
+
+  /* ── Message log ── */
+  function renderMsgLog() {
+    var log = document.getElementById('msg-log');
+    log.innerHTML = '';
+    var msgs = [];
+
+    if (activeTopic.startsWith('dm:')) {
+      msgs = dmStore[activeTopic.slice(3)] || [];
+    } else {
+      msgs = msgStore[activeTopic] || [];
+    }
+
+    if (!msgs.length) {
+      log.innerHTML = '<div class="no-msgs">No messages yet</div>';
+      return;
+    }
+    msgs.forEach(function(m) { log.appendChild(buildMsgEl(m)); });
     log.scrollTop = log.scrollHeight;
   }
 
-  function escHtml(s) {
-    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  function appendMsg(msg) {
+    var log = document.getElementById('msg-log');
+    var placeholder = log.querySelector('.no-msgs');
+    if (placeholder) placeholder.remove();
+    log.appendChild(buildMsgEl(msg));
+    log.scrollTop = log.scrollHeight;
   }
 
-  async function pollMessages() {
-    try {
-      const r = await fetch(`/api/messages?since_id=${lastMsgId}`);
-      if (!r.ok) return;
-      const msgs = await r.json();
-      msgs.forEach(m => { appendMessage(m); lastMsgId = Math.max(lastMsgId, m.id); });
-    } catch(_) {}
+  function buildMsgEl(msg) {
+    var isMine = msg.from === username;
+    var isDm = !!msg.isDm;
+    var cls = isDm ? (isMine ? 'dm-tx' : 'dm-rx') : (isMine ? 'tx' : 'rx');
+
+    var div = document.createElement('div');
+    div.className = 'msg ' + cls;
+
+    var badge = '';
+    if (isDm && isMine)    badge = '<div class="badge">DM \u2192 ' + escHtml(msg.to_user || '?') + '</div>';
+    if (isDm && !isMine)   badge = '<div class="badge">DM from ' + escHtml(msg.from) + '</div>';
+    if (!isDm && !isMine)  badge = '<div class="badge">' + escHtml(msg.from) + '</div>';
+
+    var ts = new Date((msg.ts || 0) * 1000).toLocaleTimeString();
+    var signal = msg.rssi != null ? ' \xb7 RSSI ' + msg.rssi : '';
+    var hops   = msg.hops > 0     ? ' \xb7 ' + msg.hops + ' hop' + (msg.hops > 1 ? 's' : '') : '';
+    var meta   = isMine ? ts : ts + signal + hops;
+
+    div.innerHTML = badge + '<div>' + escHtml(msg.text) + '</div><div class="meta">' + meta + '</div>';
+    return div;
   }
 
-  function renderNodeList() {
-    const list = document.getElementById("node-list");
-    const chips = [];
-    if (localNode) {
-      chips.push(
-        `<span class="node-chip local">` +
-        `<span class="local-tag">This node</span>` +
-        `${escHtml(localNode.short_name || localNode.id)}<br><small>${escHtml(localNode.long_name || "")}</small>` +
-        `</span>`
-      );
+  /* ── Ingest incoming ── */
+  function ingestTopicMsg(topicName, msg) {
+    if (!msgStore[topicName]) {
+      msgStore[topicName] = [];
+      if (topics.indexOf(topicName) === -1) {
+        topics.push(topicName);
+        renderTopicBar();
+      }
     }
-    peerNodes.forEach(n => {
-      chips.push(
-        `<span class="node-chip">${escHtml(n.short_name || n.id)}<br><small>${escHtml(n.long_name || "")}</small></span>`
-      );
-    });
-    list.innerHTML = chips.length ? chips.join("") : "—";
+    msgStore[topicName].push(msg);
+    if (activeTopic === topicName) {
+      appendMsg(msg);
+    }
   }
 
+  function ingestDm(msg) {
+    msg.isDm = true;
+    var peer = msg.from === username ? (msg.to_user || 'unknown') : msg.from;
+    if (!dmStore[peer]) dmStore[peer] = [];
+    dmStore[peer].push(msg);
+    openDmTab(peer);
+    if (activeTopic === 'dm:' + peer) appendMsg(msg);
+  }
+
+  function openDmTab(peer) {
+    if (dmPeers.indexOf(peer) === -1) {
+      dmPeers.push(peer);
+      renderTopicBar();
+    }
+  }
+
+  /* ── Send ── */
+  document.getElementById('send-btn').addEventListener('click', sendMessage);
+  document.getElementById('msg-input').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+
+  function sendMessage() {
+    var input = document.getElementById('msg-input');
+    var text = input.value.trim();
+    if (!text || !mqttClient || !mqttClient.connected) return;
+
+    var ts = Date.now() / 1000;
+
+    if (activeTopic.startsWith('dm:')) {
+      var peer = activeTopic.slice(3);
+      var dmPayload = { v: 1, from: username, to_user: peer, text: text, ts: ts, isDm: true };
+      mqttClient.publish('mesh/dm/' + peer, JSON.stringify(dmPayload));
+      ingestDm(dmPayload);
+    } else {
+      var payload = { v: 1, from: username, to_topic: activeTopic, text: text, ts: ts };
+      mqttClient.publish('mesh/topic/' + activeTopic, JSON.stringify(payload));
+    }
+    input.value = '';
+  }
+
+  /* ── Presence ── */
+  function handlePresence(user, msg) {
+    if (user === username) return;
+    var status = typeof msg === 'object' ? msg.status : String(msg);
+    var presenceEl = document.getElementById('presence-list');
+
+    if (status === 'online') {
+      if (!presenceEl.querySelector('[data-user="' + user + '"]')) {
+        var placeholder = presenceEl.querySelector('span[style]');
+        if (placeholder) presenceEl.innerHTML = '';
+        var chip = document.createElement('span');
+        chip.className = 'presence-chip';
+        chip.dataset.user = user;
+        chip.textContent = user;
+        chip.title = 'Click to DM';
+        chip.addEventListener('click', function() { startDm(user); });
+        presenceEl.appendChild(chip);
+      }
+    } else {
+      var chip = presenceEl.querySelector('[data-user="' + user + '"]');
+      if (chip) chip.remove();
+      if (!presenceEl.children.length) {
+        presenceEl.innerHTML = '<span style="color:#aaa;font-size:.82rem;">No one else here yet</span>';
+      }
+    }
+  }
+
+  function startDm(peer) {
+    openDmTab(peer);
+    activeTopic = 'dm:' + peer;
+    renderTopicBar();
+    renderMsgLog();
+    document.getElementById('msg-input').focus();
+  }
+
+  /* ── File transfer ── */
+  document.getElementById('file-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var file = document.getElementById('file-input').files[0];
+    if (!file) return;
+
+    var form = new FormData();
+    form.append('file', file);
+    form.append('destination', '^all');
+    form.append('username', username);
+
+    document.getElementById('file-send-btn').disabled = true;
+    document.getElementById('xfer-status').textContent = 'Uploading\u2026';
+    document.getElementById('send-progress').style.display = 'block';
+    document.getElementById('send-progress').value = 0;
+
+    try {
+      var r = await fetch('/api/transfer/send', { method: 'POST', body: form });
+      if (!r.ok) {
+        document.getElementById('xfer-status').textContent = 'Error: ' + await r.text();
+        document.getElementById('file-send-btn').disabled = false;
+        return;
+      }
+      var data = await r.json();
+      document.getElementById('xfer-status').textContent = 'Transfer #' + data.transfer_id + ' started\u2026';
+      startProgressPoll(data.transfer_id);
+    } catch(err) {
+      document.getElementById('xfer-status').textContent = 'Network error';
+      document.getElementById('file-send-btn').disabled = false;
+    }
+  });
+
+  function startProgressPoll(id) {
+    if (progressPoller) clearInterval(progressPoller);
+    progressPoller = setInterval(async function() {
+      try {
+        var r = await fetch('/api/transfer/progress/' + id);
+        if (!r.ok) return;
+        var p = await r.json();
+        var done = p.sent_chunks || 0;
+        var total = p.total_chunks || 1;
+        document.getElementById('send-progress').value = done / total;
+        document.getElementById('xfer-status').textContent =
+          'Sending: chunk ' + done + '/' + total + ' \u2014 ' + p.status;
+        if (p.status === 'done' || p.status === 'error') {
+          clearInterval(progressPoller);
+          progressPoller = null;
+          document.getElementById('file-send-btn').disabled = false;
+          document.getElementById('send-progress').style.display = 'none';
+        }
+      } catch(e) {}
+    }, 1000);
+  }
+
+  function handleFileNotify(msg) {
+    var id = msg.transfer_id;
+    if (!id) return;
+    var tbody = document.getElementById('recv-body');
+    if (!tbody.querySelector('[data-tid="' + id + '"]')) {
+      var tr = document.createElement('tr');
+      tr.dataset.tid = id;
+      tr.innerHTML =
+        '<td>' + escHtml(msg.filename || 'file') + '</td>' +
+        '<td>' + escHtml(msg.from || '?') + '</td>' +
+        '<td>' + ((msg.size || 0) / 1024).toFixed(1) + ' KB</td>' +
+        '<td><a class="dl" href="/api/transfer/download/' + id + '">Download</a></td>';
+      tbody.appendChild(tr);
+      document.getElementById('recv-table').style.display = 'table';
+    }
+  }
+
+  /* ── Nodes ── */
   async function loadLocalNode() {
     try {
-      const r = await fetch("/api/local-node");
+      var r = await fetch('/api/local-node');
       if (!r.ok) return;
-      const node = await r.json();
-      const label = document.getElementById("local-node-label");
-      if (node) {
-        localNode = node;
-        label.textContent = `This node: ${node.short_name || node.id}${node.long_name ? " — " + node.long_name : ""}`;
-      } else {
-        localNode = null;
-        label.textContent = "No ESP32 connected";
-      }
-      renderNodeList();
-    } catch(_) {}
+      var node = await r.json();
+      document.getElementById('local-node-label').textContent =
+        node ? 'Node: ' + (node.short_name || node.id) : 'No ESP32 connected';
+    } catch(e) {}
   }
 
   async function loadNodes() {
     try {
-      const r = await fetch("/api/nodes");
+      var r = await fetch('/api/nodes');
       if (!r.ok) return;
-      const nodes = await r.json();
-      peerNodes = nodes;
-      const peerCount = document.getElementById("peer-count");
-      const destSelects = [document.getElementById("dest-select"), document.getElementById("file-dest-select")];
-
-      peerCount.textContent = nodes.length ? `${nodes.length} peer(s) online` : "No peers found";
-      renderNodeList();
-
-      destSelects.forEach(sel => {
-        const existing = Array.from(sel.options).map(o => o.value);
-        nodes.forEach(n => {
-          if (!existing.includes(n.id)) {
-            const opt = document.createElement("option");
-            opt.value = n.id;
-            opt.textContent = (n.short_name || n.id);
-            sel.appendChild(opt);
-          }
-        });
-      });
-    } catch(_) {}
+      var nodes = await r.json();
+      var list = document.getElementById('node-list');
+      list.innerHTML = nodes.length
+        ? nodes.map(function(n) {
+            return '<span class="node-chip">' + escHtml(n.short_name || n.id) + '</span>';
+          }).join('')
+        : '<span style="color:#aaa;font-size:.82rem;">No peers found</span>';
+    } catch(e) {}
   }
 
-  document.getElementById("send-form").addEventListener("submit", async e => {
-    e.preventDefault();
-    const input = document.getElementById("msg-input");
-    const text = input.value.trim();
-    const destination = document.getElementById("dest-select").value;
-    if (!text) return;
-    input.value = "";
-    try {
-      const r = await fetch("/api/messages", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({text, destination})
-      });
-      if (!r.ok) { alert("Send failed"); return; }
-      const msg = await r.json();
-      appendMessage(msg);
-      lastMsgId = Math.max(lastMsgId, msg.id);
-    } catch(_) { alert("Network error"); }
-  });
+  /* ── Hop-by-hop latency ── */
+  var wifiSamples = [];
 
-  document.getElementById("file-form").addEventListener("submit", async e => {
-    e.preventDefault();
-    const fileInput = document.getElementById("file-input");
-    const file = fileInput.files[0];
-    if (!file) return;
-    const destination = document.getElementById("file-dest-select").value;
-
-    const form = new FormData();
-    form.append("file", file);
-    form.append("destination", destination);
-
-    document.getElementById("file-send-btn").disabled = true;
-    document.getElementById("transfer-status").textContent = "Uploading…";
-    document.getElementById("send-progress").style.display = "block";
-    document.getElementById("send-progress").value = 0;
-
-    try {
-      const r = await fetch("/api/transfer/send", {method: "POST", body: form});
-      if (!r.ok) {
-        const msg = await r.text();
-        document.getElementById("transfer-status").textContent = "Error: " + msg;
-        document.getElementById("file-send-btn").disabled = false;
-        return;
-      }
-      const {transfer_id} = await r.json();
-      activeTransferId = transfer_id;
-      document.getElementById("transfer-status").textContent = `Transfer #${transfer_id} started…`;
-      startProgressPolling(transfer_id);
-    } catch(_) {
-      document.getElementById("transfer-status").textContent = "Network error";
-      document.getElementById("file-send-btn").disabled = false;
-    }
-  });
-
-  function startProgressPolling(transfer_id) {
-    if (progressPoller) clearInterval(progressPoller);
-    progressPoller = setInterval(async () => {
-      try {
-        const r = await fetch(`/api/transfer/progress/${transfer_id}`);
-        if (!r.ok) return;
-        const p = await r.json();
-        const sent = p.sent_chunks || p.received_chunks || 0;
-        const total = p.total_chunks || 1;
-        document.getElementById("send-progress").value = sent / total;
-        document.getElementById("transfer-status").textContent =
-          `${p.direction === "tx" ? "Sending" : "Receiving"}: chunk ${sent}/${total} — ${p.status}`;
-        if (p.status === "done" || p.status === "error") {
-          clearInterval(progressPoller);
-          progressPoller = null;
-          document.getElementById("file-send-btn").disabled = false;
-          if (p.status === "done") refreshReceivedList();
-        }
-      } catch(_) {}
-    }, 1000);
-  }
-
-  async function refreshReceivedList() {
-    try {
-      const r = await fetch("/api/transfer/received");
-      if (!r.ok) return;
-      const files = await r.json();
-      const tbody = document.getElementById("received-body");
-      if (!files.length) {
-        tbody.innerHTML = '<tr><td colspan="4" style="color:#aaa;">None yet</td></tr>';
-        return;
-      }
-      tbody.innerHTML = files.map(f =>
-        `<tr>
-          <td>${f.transfer_id}</td>
-          <td>${(f.size / 1024).toFixed(1)} KB</td>
-          <td>${f.total_chunks}</td>
-          <td><a class="dl" href="/api/transfer/download/${f.transfer_id}">Download</a></td>
-        </tr>`
-      ).join("");
-    } catch(_) {}
-  }
-
-  // ── WiFi latency measurement ────────────────────────────────────────────
   async function measureWifiPing() {
-    const el = document.getElementById("wifi-rtt");
     try {
-      const t0 = performance.now();
-      const r = await fetch("/api/ping");
-      if (!r.ok) { el.textContent = "error"; return; }
-      await r.json();
-      const rtt = Math.round(performance.now() - t0);
-      el.textContent = rtt + " ms";
-    } catch(_) { el.textContent = "error"; }
-  }
-
-  // ── BLE status & latency polling ──────────────────────────────────────
-  async function loadBleStatus() {
-    try {
-      const r = await fetch("/api/latency");
+      var t0 = performance.now();
+      var r = await fetch('/api/ping');
       if (!r.ok) return;
-      const data = await r.json();
-      const s = data.ble_status || {};
-      document.getElementById("ble-clients").textContent = s.client_count ?? "—";
-      document.getElementById("ble-gw-id").textContent = s.gateway_id || "—";
-      document.getElementById("ble-mesh").textContent = s.mesh_connected ? "Connected" : "Offline";
-      const samples = data.ble_rtt_samples || [];
-      if (samples.length > 0) {
-        const avg = Math.round(samples.reduce((a,b) => a+b, 0) / samples.length);
-        const last = samples[samples.length - 1];
-        document.getElementById("ble-rtt").textContent = last + " ms (avg " + avg + " ms)";
-      } else {
-        document.getElementById("ble-rtt").textContent = "—";
-      }
-    } catch(_) {}
+      await r.json();
+      var ms = Math.round(performance.now() - t0);
+      wifiSamples.push(ms);
+      if (wifiSamples.length > 50) wifiSamples.shift();
+      fillRow('wifi', wifiSamples);
+    } catch(e) {}
   }
 
-  setInterval(pollMessages, 2000);
-  setInterval(loadNodes, 15000);
-  setInterval(loadLocalNode, 30000);
-  setInterval(refreshReceivedList, 10000);
-  setInterval(loadBleStatus, 5000);
+  async function measureSerial() {
+    var btn = event.target; btn.disabled = true; btn.textContent = '…';
+    try {
+      var r = await fetch('/api/latency/serial', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+      if (!r.ok) return;
+    } catch(e) {}
+    btn.disabled = false; btn.textContent = 'Measure';
+    loadLatency();
+  }
 
-  pollMessages();
-  loadLocalNode();
-  loadNodes();
-  refreshReceivedList();
-  loadBleStatus();
-  measureWifiPing();
+  async function meshPing() {
+    var btn = event.target; btn.disabled = true; btn.textContent = '…';
+    try {
+      await fetch('/api/latency/mesh-ping', { method: 'POST' });
+    } catch(e) {}
+    btn.disabled = false; btn.textContent = 'Ping';
+    setTimeout(loadLatency, 3000);
+  }
+
+  function fillRow(prefix, samples) {
+    if (!samples || !samples.length) return;
+    var avg = Math.round(samples.reduce(function(a,b){return a+b;},0) / samples.length);
+    document.getElementById(prefix+'-last').textContent = samples[samples.length-1] + ' ms';
+    document.getElementById(prefix+'-avg').textContent = avg + ' ms';
+    document.getElementById(prefix+'-min').textContent = Math.min.apply(null, samples) + ' ms';
+    document.getElementById(prefix+'-max').textContent = Math.max.apply(null, samples) + ' ms';
+    document.getElementById(prefix+'-n').textContent = samples.length;
+  }
+
+  function fillRowFromObj(prefix, obj) {
+    if (!obj || !obj.count) return;
+    document.getElementById(prefix+'-last').textContent = obj.last + ' ms';
+    document.getElementById(prefix+'-avg').textContent = obj.avg + ' ms';
+    document.getElementById(prefix+'-min').textContent = obj.min + ' ms';
+    document.getElementById(prefix+'-max').textContent = obj.max + ' ms';
+    document.getElementById(prefix+'-n').textContent = obj.count;
+  }
+
+  async function loadLatency() {
+    try {
+      var r = await fetch('/api/latency');
+      if (!r.ok) return;
+      var data = await r.json();
+      var s = data.ble_status || {};
+      document.getElementById('ble-clients').textContent = s.client_count != null ? s.client_count : '—';
+      document.getElementById('ble-gw-id').textContent = s.gateway_id || '—';
+      document.getElementById('ble-mesh').textContent = s.mesh_connected ? 'Connected' : 'Offline';
+      fillRowFromObj('ble', data.ble_rtt);
+      fillRowFromObj('serial', data.serial_rtt);
+      fillRowFromObj('mesh', data.mesh_rtt);
+      fillRowFromObj('lora', data.lora_rtt);
+    } catch(e) {}
+  }
+
+  /* ── Utils ── */
+  function escHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
 </script>
 </body>
 </html>

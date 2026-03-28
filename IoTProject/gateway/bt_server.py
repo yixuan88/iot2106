@@ -121,13 +121,23 @@ def _build_beacon_data() -> bytes:
 
 def _create_advertisement() -> Advertisement:
     """Create a BLE advertisement with NUS service UUID and beacon data."""
-    return Advertisement(
-        "GatewayBLE",
-        [NUS_SERVICE_UUID],
-        appearance=0x0000,
-        timeout=0,
-        manufacturerData={BEACON_COMPANY_ID: _build_beacon_data()},
-    )
+    try:
+        return Advertisement(
+            "GatewayBLE",
+            [NUS_SERVICE_UUID],
+            appearance=0x0000,
+            timeout=0,
+            manufacturer_data={BEACON_COMPANY_ID: _build_beacon_data()},
+        )
+    except TypeError:
+        # Fallback: library version may not support manufacturer_data
+        logger.warning("BLE: manufacturer_data not supported, advertising without beacon")
+        return Advertisement(
+            "GatewayBLE",
+            [NUS_SERVICE_UUID],
+            appearance=0x0000,
+            timeout=0,
+        )
 
 
 async def _refresh_advertisement():
@@ -139,7 +149,7 @@ async def _refresh_advertisement():
         if _advert is not None:
             await _advert.unregister()
         _advert = _create_advertisement()
-        await _advert.register(_bus, adapter=_adapter)
+        await _advert.register(_bus, adapter=_adapter, path="/com/meshgateway/advert0")
         logger.debug("BLE beacon refreshed (clients=%d, mesh=%s)",
                      _client_count, _mesh_connected)
     except Exception:
@@ -381,9 +391,9 @@ async def _setup_and_serve():
     # Register a Just-Works pairing agent (no PIN required)
     await NoIoAgent().register(bus)
 
-    # Start advertising with beacon manufacturer data
+    # Start advertising with beacon manufacturer data (fixed path to avoid slot exhaustion on retry)
     _advert = _create_advertisement()
-    await _advert.register(bus, adapter=adapter)
+    await _advert.register(bus, adapter=adapter, path="/com/meshgateway/advert0")
     logger.info("BLE advertising as 'GatewayBLE' (beacon: gateway_id=0x%04X) - ready",
                 _gateway_id)
 

@@ -355,6 +355,13 @@ async def _serve_with_restart():
 async def _setup_and_serve():
     global _nus_service, _advert, _bus, _adapter
 
+    # Power-cycle the adapter to clear any stale advertisements from previous runs
+    logger.info("BLE: power-cycling adapter to clear stale state")
+    subprocess.run(["bluetoothctl"], input=b"power off\n", capture_output=True, timeout=6)
+    await asyncio.sleep(2)
+    subprocess.run(["bluetoothctl"], input=b"power on\npairable on\n", capture_output=True, timeout=6)
+    await asyncio.sleep(2)
+
     bus = await get_message_bus()
     _bus = bus
 

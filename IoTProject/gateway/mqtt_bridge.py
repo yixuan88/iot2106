@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 BROKER_HOST = "127.0.0.1"
 BROKER_PORT = 1883
 MAX_LORA_BYTES = 228
-GATEWAY_STATUS_INTERVAL = 5  # seconds
+GATEWAY_STATUS_INTERVAL = 5   # local MQTT publish interval (seconds)
+LORA_STATUS_INTERVAL = 10     # LoRa broadcast interval (seconds)
 
 _client = None
 _local_users = {}
@@ -199,6 +200,37 @@ def _route_incoming_text(raw_text, from_id, rssi, snr, hops):
     if raw_text.startswith("MESHPING:") or raw_text.startswith("MESHPONG:"):
         return
 
+    # Remote gateway status — republish to local MQTT for the topology view
+    if raw_text.startswith("G|"):
+        try:
+            compact = json.loads(raw_text[2:])
+            remote_id = compact.get("id", from_id)
+            if remote_id == _gateway_id:
+                return  # don't re-publish our own status
+            status = {
+                "online": True,
+                "gateway_id": remote_id,
+                "hostname": remote_id,
+                "ble": {
+                    "client_count": compact.get("bl", 0),
+                    "gateway_id": compact.get("bx", ""),
+                    "advertising": True,
+                },
+                "mesh": {
+                    "connected": compact.get("mc", False),
+                    "local_node": compact.get("mn"),
+                    "peer_count": compact.get("mp", 0),
+                    "peers": [],
+                },
+                "wifi_users": compact.get("wu", []),
+                "ts": time.time(),
+            }
+            _publish(f"mesh/gateway/{remote_id}/status", status, retain=True)
+            logger.info("Remote gateway %s status received via LoRa, published locally", remote_id)
+        except (json.JSONDecodeError, KeyError):
+            logger.warning("Malformed gateway status from LoRa: %s", raw_text[:60])
+        return
+
     ts = time.time()
 
     if raw_text.startswith("T|") or raw_text.startswith("D|"):
@@ -274,15 +306,49 @@ def get_gateway_status():
 
 
 def _publish_gateway_status_loop():
-    """Periodically publish this gateway's status to MQTT (retained)."""
+    """Periodically publish this gateway's status to MQTT and LoRa."""
     time.sleep(5)  # wait for services to settle
+    lora_counter = 0
     while _client is not None:
         try:
             status = get_gateway_status()
             _publish(f"mesh/gateway/{_gateway_id}/status", status, retain=True)
         except Exception:
             logger.debug("Could not publish gateway status")
+
+        # Every LORA_STATUS_INTERVAL, also broadcast over LoRa mesh
+        lora_counter += GATEWAY_STATUS_INTERVAL
+        if lora_counter >= LORA_STATUS_INTERVAL:
+            lora_counter = 0
+            try:
+                compact = _build_compact_status()
+                mesh_interface.send_text(f"G|{compact}")
+                logger.debug("Gateway status broadcast over LoRa")
+            except RuntimeError:
+                pass  # no mesh connection
+            except Exception:
+                logger.debug("Could not broadcast gateway status over LoRa")
+
         time.sleep(GATEWAY_STATUS_INTERVAL)
+
+
+def _build_compact_status():
+    """Build a compact JSON string for LoRa transmission (must fit in 228 bytes)."""
+    from gateway import bt_server
+    ble = bt_server.get_status()
+    local_node = mesh_interface.get_local_node()
+    peers = mesh_interface.get_node_info()
+    with _local_users_lock:
+        wifi_users = [u for u in _local_users.keys() if u != "BLE-device"]
+    return json.dumps({
+        "id": _gateway_id,
+        "bl": ble.get("client_count", 0),
+        "bx": ble.get("gateway_id", ""),
+        "mc": ble.get("mesh_connected", False),
+        "mn": local_node.get("short_name") if local_node else None,
+        "mp": len(peers),
+        "wu": wifi_users[:5],  # cap to keep message small
+    }, separators=(',', ':'))
 
 
 def _publish(topic, payload_dict, retain=False):

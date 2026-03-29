@@ -251,7 +251,8 @@ def get_gateway_status():
     local_node = mesh_interface.get_local_node()
     peers = mesh_interface.get_node_info()
     with _local_users_lock:
-        wifi_users = list(_local_users.keys())
+        # Exclude BLE-device from WiFi users — it's tracked via ble.client_count
+        wifi_users = [u for u in _local_users.keys() if u != "BLE-device"]
     return {
         "online": True,
         "gateway_id": _gateway_id,

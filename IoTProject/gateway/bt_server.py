@@ -218,11 +218,94 @@ def _handle_received_text(text: str):
                 _latency_samples.append(rtt_ms)
                 _latency_samples[:] = _latency_samples[-MAX_LATENCY_SAMPLES:]
             logger.info("BLE RTT reported by client: %d ms", rtt_ms)
+            # Auto-trigger full hop-by-hop measurement chain
+            threading.Thread(target=_run_full_measurement, args=(rtt_ms,),
+                             daemon=True).start()
         except ValueError:
             pass
         return
     logger.info("BLE -> mesh: %s", text)
     _forward_message(text)
+
+
+def _run_full_measurement(ble_rtt_ms):
+    """Triggered by BLRTT — runs serial + mesh measurements and sends summary to M5StickC."""
+    from gateway import mesh_interface, latency, mqtt_bridge
+
+    results = {"ble": ble_rtt_ms, "serial": None, "mesh": None, "lora": None}
+
+    def _publish_progress(step, status, value=None):
+        _ble_notify(f"[{step}: {status}]" if value is None else f"{step}: {value}ms")
+        try:
+            mqtt_bridge._publish("mesh/latency/progress", {
+                "step": step, "status": status, "value": value,
+                "results": results, "ts": time.time(),
+            })
+        except Exception:
+            pass
+
+    _publish_progress("ble", "done", ble_rtt_ms)
+
+    # Step 1: Serial RTT (RPi ↔ ESP32)
+    _publish_progress("serial", "measuring")
+    try:
+        serial_samples = mesh_interface.measure_serial_rtt(3)
+        if serial_samples:
+            results["serial"] = round(sum(serial_samples) / len(serial_samples), 1)
+            _publish_progress("serial", "done", results["serial"])
+        else:
+            _publish_progress("serial", "no ESP32")
+    except Exception:
+        _publish_progress("serial", "error")
+
+    # Step 2: Mesh RTT (RPi ↔ RPi via LoRa)
+    _publish_progress("mesh", "measuring")
+    try:
+        pre_count = len(latency.get_mesh_samples())
+        ping_id = latency.send_mesh_ping()
+        if ping_id:
+            for _ in range(20):  # up to 10 seconds
+                time.sleep(0.5)
+                samples = latency.get_mesh_samples()
+                if len(samples) > pre_count:
+                    results["mesh"] = samples[-1]
+                    break
+            if results["mesh"]:
+                _publish_progress("mesh", "done", results["mesh"])
+                if results["serial"]:
+                    lora = results["mesh"] - 2 * results["serial"]
+                    if lora > 0:
+                        results["lora"] = round(lora, 1)
+                        _publish_progress("lora", "done", results["lora"])
+                    else:
+                        _publish_progress("lora", "—")
+            else:
+                _publish_progress("mesh", "no reply")
+        else:
+            _publish_progress("mesh", "no connection")
+    except Exception:
+        _publish_progress("mesh", "error")
+
+    # Final summary to M5StickC + MQTT
+    parts = []
+    for hop in ["ble", "serial", "mesh", "lora"]:
+        v = results[hop]
+        parts.append(f"{hop}:{v}ms" if v is not None else f"{hop}:—")
+    _ble_notify("[" + " ".join(parts) + "]")
+    try:
+        mqtt_bridge._publish("mesh/latency/progress", {
+            "step": "complete", "status": "done", "results": results,
+            "ts": time.time(),
+        })
+    except Exception:
+        pass
+    logger.info("Full measurement: %s", results)
+
+
+def _ble_notify(text):
+    """Send a notification to connected BLE clients (thread-safe helper)."""
+    if _loop and _nus_service:
+        asyncio.run_coroutine_threadsafe(_notify(text), _loop)
 
 
 def _forward_message(text: str):

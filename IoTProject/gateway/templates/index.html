@@ -152,6 +152,12 @@
       border: none; border-radius: 4px; cursor: pointer;
     }
     .lat-btn:disabled { background: #90b8f0; cursor: not-allowed; }
+    .lp-step { padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+    .lp-wait { background: #FFF3E0; color: #E65100; }
+    .lp-active { background: #E3F2FD; color: #1565C0; animation: lp-pulse 1s infinite; }
+    .lp-done { background: #E8F5E9; color: #2E7D32; }
+    .lp-fail { background: #FFEBEE; color: #C62828; }
+    @keyframes lp-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 
     @media (max-width: 480px) {
       #send-bar { flex-wrap: wrap; }
@@ -203,6 +209,15 @@
 
   <div class="section">
     <div class="section-header">Hop-by-Hop Latency</div>
+    <div id="lat-progress" style="display:none;padding:8px 12px;margin-bottom:8px;border-radius:8px;background:#FFF8E1;border:1px solid #FFB300;font-size:0.82rem;">
+      <strong>Full measurement in progress (M5StickC)</strong>
+      <div style="display:flex;gap:12px;margin-top:4px;" id="lat-progress-steps">
+        <span id="lp-ble" class="lp-step">BLE: —</span>
+        <span id="lp-serial" class="lp-step">Serial: —</span>
+        <span id="lp-mesh" class="lp-step">Mesh: —</span>
+        <span id="lp-lora" class="lp-step">LoRa: —</span>
+      </div>
+    </div>
     <table id="latency-table" style="font-size:0.82rem;margin-bottom:8px;">
       <thead><tr><th>Hop</th><th>Path</th><th>Last</th><th>Avg</th><th>Min</th><th>Max</th><th>n</th><th></th></tr></thead>
       <tbody>
@@ -383,6 +398,8 @@
         handleFileNotify(msg);
       } else if (topic.indexOf('mesh/gateway/') === 0 && topic.indexOf('/status') > 0) {
         handleGatewayStatus(msg);
+      } else if (topic === 'mesh/latency/progress') {
+        handleLatencyProgress(msg);
       }
     });
 
@@ -403,6 +420,7 @@
     mqttClient.subscribe('mesh/presence/+');
     mqttClient.subscribe('mesh/file/notify/+');
     mqttClient.subscribe('mesh/gateway/+/status');
+    mqttClient.subscribe('mesh/latency/progress');
   }
 
   function setConnStatus(cls, label) {
@@ -812,6 +830,58 @@
     document.getElementById(prefix+'-min').textContent = obj.min + ' ms';
     document.getElementById(prefix+'-max').textContent = obj.max + ' ms';
     document.getElementById(prefix+'-n').textContent = obj.count;
+  }
+
+  /* ── Full measurement progress (MQTT real-time) ── */
+  var latProgressTimer = null;
+
+  function handleLatencyProgress(msg) {
+    var banner = document.getElementById('lat-progress');
+    banner.style.display = 'block';
+
+    var stepMap = { ble: 'lp-ble', serial: 'lp-serial', mesh: 'lp-mesh', lora: 'lp-lora' };
+    var step = msg.step;
+    var status = msg.status;
+    var value = msg.value;
+
+    if (step === 'complete') {
+      // All done — show final results, hide after 8s
+      var r = msg.results || {};
+      ['ble', 'serial', 'mesh', 'lora'].forEach(function(h) {
+        var el = document.getElementById(stepMap[h]);
+        var v = r[h];
+        el.textContent = h.toUpperCase() + ': ' + (v != null ? v + 'ms' : '—');
+        el.className = 'lp-step ' + (v != null ? 'lp-done' : 'lp-fail');
+      });
+      banner.querySelector('strong').textContent = 'Measurement complete!';
+      banner.style.background = '#E8F5E9';
+      banner.style.borderColor = '#4CAF50';
+      loadLatency();
+      clearTimeout(latProgressTimer);
+      latProgressTimer = setTimeout(function() {
+        banner.style.display = 'none';
+        banner.style.background = '#FFF8E1';
+        banner.style.borderColor = '#FFB300';
+        banner.querySelector('strong').textContent = 'Full measurement in progress (M5StickC)';
+      }, 8000);
+      return;
+    }
+
+    // Individual step update
+    var el = stepMap[step] ? document.getElementById(stepMap[step]) : null;
+    if (!el) return;
+
+    if (status === 'measuring') {
+      el.textContent = step.toUpperCase() + ': measuring…';
+      el.className = 'lp-step lp-active';
+    } else if (status === 'done' && value != null) {
+      el.textContent = step.toUpperCase() + ': ' + value + 'ms';
+      el.className = 'lp-step lp-done';
+      loadLatency();
+    } else {
+      el.textContent = step.toUpperCase() + ': ' + status;
+      el.className = 'lp-step lp-fail';
+    }
   }
 
   /* ── Latency charts (Canvas API) ── */
@@ -1259,9 +1329,8 @@
     }).catch(function(){});
   }, 5000);
 
-  // Hook into existing loadLatency to also update charts
-  var _origLoadLatency = loadLatency;
-  loadLatency = async function() {
+  // Fetch all latency data from API and update table + charts
+  async function loadLatency() {
     try {
       var r = await fetch('/api/latency');
       if (!r.ok) return;
@@ -1279,7 +1348,7 @@
       drawBarChart(data);
       drawLineChart();
     } catch(e) {}
-  };
+  }
 
   /* ── Utils ── */
   function escHtml(s) {

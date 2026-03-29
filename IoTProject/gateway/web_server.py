@@ -112,10 +112,14 @@ def create_app(store, file_transfer):
 
     @app.route("/api/latency/serial", methods=["POST"])
     def latency_serial():
+        if not mesh_interface.is_connected():
+            return jsonify({"error": "No ESP32 connected", "samples": [], "avg": None}), 503
         body = request.get_json(silent=True) or {}
         count = min(max(int(body.get("count", 3)), 1), 10)
         samples = mesh_interface.measure_serial_rtt(count)
-        return jsonify({"samples": samples, "avg": round(sum(samples) / len(samples), 2) if samples else None})
+        if not samples:
+            return jsonify({"error": "Measurement failed", "samples": [], "avg": None}), 503
+        return jsonify({"samples": samples, "avg": round(sum(samples) / len(samples), 2)})
 
     @app.route("/api/gateway/status", methods=["GET"])
     def gateway_status():

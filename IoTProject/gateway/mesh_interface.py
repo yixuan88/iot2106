@@ -20,6 +20,10 @@ _serial_rtt_lock = threading.Lock()
 MAX_SERIAL_SAMPLES = 50
 
 
+def is_connected():
+    return _interface is not None
+
+
 def connect(device=None, transport="serial"):  # opens a serial or BLE connection to the LoRa32 and subscribes to incoming packets
     global _interface, _transport, _device
     _transport = transport

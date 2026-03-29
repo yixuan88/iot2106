@@ -214,17 +214,17 @@
         <tr>
           <td>2</td><td>BLE (M5StickC ↔ RPi)</td>
           <td id="ble-last">—</td><td id="ble-avg">—</td><td id="ble-min">—</td><td id="ble-max">—</td><td id="ble-n">0</td>
-          <td><span style="font-size:0.7rem;color:#888;">via M5 btn</span></td>
+          <td><button onclick="refreshBle(this)" class="lat-btn">Refresh</button></td>
         </tr>
         <tr>
           <td>3</td><td>Serial (RPi ↔ ESP32 USB)</td>
           <td id="serial-last">—</td><td id="serial-avg">—</td><td id="serial-min">—</td><td id="serial-max">—</td><td id="serial-n">0</td>
-          <td><button onclick="measureSerial()" class="lat-btn">Measure</button></td>
+          <td><button onclick="measureSerial(this)" class="lat-btn">Measure</button></td>
         </tr>
         <tr>
           <td>4</td><td>Mesh (RPi ↔ RPi full path)</td>
           <td id="mesh-last">—</td><td id="mesh-avg">—</td><td id="mesh-min">—</td><td id="mesh-max">—</td><td id="mesh-n">0</td>
-          <td><button onclick="meshPing()" class="lat-btn">Ping</button></td>
+          <td><button onclick="meshPing(this)" class="lat-btn">Ping</button></td>
         </tr>
         <tr style="color:#1a73e8;font-style:italic;">
           <td>5</td><td>LoRa (derived: mesh − 2×serial)</td>
@@ -335,7 +335,7 @@
     loadLatency();
     measureWifiPing();
     setInterval(loadNodes, 15000);
-    setInterval(loadLatency, 5000);
+    setInterval(loadLatency, 3000);
   }
 
   /* ── MQTT ── */
@@ -739,23 +739,58 @@
     } catch(e) {}
   }
 
-  async function measureSerial() {
-    var btn = event.target; btn.disabled = true; btn.textContent = '…';
+  async function measureSerial(btn) {
+    btn.disabled = true; btn.textContent = '…';
     try {
       var r = await fetch('/api/latency/serial', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
-      if (!r.ok) return;
-    } catch(e) {}
+      var data = await r.json();
+      if (!r.ok || !data.samples || data.samples.length === 0) {
+        var el = document.getElementById('serial-last');
+        el.textContent = data.error || 'No ESP32';
+        el.style.color = '#EF5350';
+      }
+    } catch(e) {
+      var el = document.getElementById('serial-last');
+      el.textContent = 'Error';
+      el.style.color = '#EF5350';
+    }
     btn.disabled = false; btn.textContent = 'Measure';
     loadLatency();
   }
 
-  async function meshPing() {
-    var btn = event.target; btn.disabled = true; btn.textContent = '…';
+  async function meshPing(btn) {
+    btn.disabled = true; btn.textContent = '…';
+    var meshEl = document.getElementById('mesh-last');
     try {
-      await fetch('/api/latency/mesh-ping', { method: 'POST' });
-    } catch(e) {}
+      var r = await fetch('/api/latency/mesh-ping', { method: 'POST' });
+      var data = await r.json().catch(function() { return {}; });
+      if (!r.ok) {
+        meshEl.textContent = data.error || 'No mesh';
+        meshEl.style.color = '#EF5350';
+        btn.disabled = false; btn.textContent = 'Ping';
+        return;
+      }
+      meshEl.textContent = 'Waiting…';
+      meshEl.style.color = '#FF9800';
+    } catch(e) {
+      meshEl.textContent = 'Error';
+      meshEl.style.color = '#EF5350';
+    }
     btn.disabled = false; btn.textContent = 'Ping';
     setTimeout(loadLatency, 3000);
+    setTimeout(loadLatency, 6000);
+    setTimeout(loadLatency, 10000);
+  }
+
+  async function refreshBle(btn) {
+    btn.disabled = true; btn.textContent = '…';
+    await loadLatency();
+    var el = document.getElementById('ble-last');
+    if (el.textContent === '—') {
+      el.textContent = 'Press M5 btn';
+      el.style.color = '#FF9800';
+    }
+    btn.disabled = false; btn.textContent = 'Refresh';
   }
 
   function fillRow(prefix, samples) {
@@ -770,7 +805,9 @@
 
   function fillRowFromObj(prefix, obj) {
     if (!obj || !obj.count) return;
-    document.getElementById(prefix+'-last').textContent = obj.last + ' ms';
+    var el = document.getElementById(prefix+'-last');
+    el.textContent = obj.last + ' ms';
+    el.style.color = '';
     document.getElementById(prefix+'-avg').textContent = obj.avg + ' ms';
     document.getElementById(prefix+'-min').textContent = obj.min + ' ms';
     document.getElementById(prefix+'-max').textContent = obj.max + ' ms';

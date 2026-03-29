@@ -5,6 +5,7 @@ import io
 
 from gateway import mesh_interface
 from gateway import bt_server
+from gateway import mqtt_bridge
 from gateway import latency
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,13 @@ def create_app(store, file_transfer):
         count = min(max(int(body.get("count", 3)), 1), 10)
         samples = mesh_interface.measure_serial_rtt(count)
         return jsonify({"samples": samples, "avg": round(sum(samples) / len(samples), 2) if samples else None})
+
+    @app.route("/api/gateway/status", methods=["GET"])
+    def gateway_status():
+        try:
+            return jsonify(mqtt_bridge.get_gateway_status())
+        except Exception:
+            return jsonify({"online": False}), 503
 
     @app.route("/api/latency/mesh-ping", methods=["POST"])
     def latency_mesh_ping():

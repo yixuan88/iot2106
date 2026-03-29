@@ -1,5 +1,6 @@
 import json
 import logging
+import socket
 import threading
 import time
 
@@ -13,19 +14,29 @@ logger = logging.getLogger(__name__)
 BROKER_HOST = "127.0.0.1"
 BROKER_PORT = 1883
 MAX_LORA_BYTES = 228
+GATEWAY_STATUS_INTERVAL = 5  # seconds
 
 _client = None
 _local_users = {}
 _local_users_lock = threading.Lock()
+_status_thread = None
+_gateway_id = None
 
 
 def start():
-    global _client
+    global _client, _status_thread, _gateway_id
 
     _client = mqtt.Client(
         callback_api_version=CallbackAPIVersion.VERSION2,
         client_id="gateway_bridge",
         clean_session=True,
+    )
+    # LWT: mark this gateway offline when MQTT connection drops
+    _gateway_id = socket.gethostname()
+    _client.will_set(
+        f"mesh/gateway/{_gateway_id}/status",
+        json.dumps({"online": False, "gateway_id": _gateway_id}),
+        qos=0, retain=True,
     )
     _client.on_connect = _on_connect
     _client.on_message = _on_message
@@ -34,6 +45,11 @@ def start():
     _client.loop_start()
 
     mesh_interface.register_receive_callback(_on_lora_packet)
+
+    # Start periodic gateway status publisher
+    _status_thread = threading.Thread(target=_publish_gateway_status_loop, daemon=True)
+    _status_thread.start()
+
     logger.info("MQTT bridge started, connected to %s:%d", BROKER_HOST, BROKER_PORT)
 
 
@@ -79,6 +95,7 @@ def _on_connect(client, userdata, flags, reason_code, properties):
         client.subscribe("mesh/topic/+")
         client.subscribe("mesh/dm/+")
         client.subscribe("mesh/presence/+")
+        client.subscribe("mesh/gateway/+/status")
         logger.info("MQTT bridge subscribed to mesh topics")
     else:
         logger.error("MQTT bridge connect failed, reason code: %s", reason_code)
@@ -225,6 +242,46 @@ def _route_incoming_text(raw_text, from_id, rssi, snr, hops):
         }
         _publish("mesh/topic/general", payload)
         logger.debug("Legacy LoRa text from %s routed to mesh/topic/general", from_id)
+
+
+def get_gateway_status():
+    """Build status dict for this gateway (used by API and MQTT publishing)."""
+    from gateway import bt_server
+    ble = bt_server.get_status()
+    local_node = mesh_interface.get_local_node()
+    peers = mesh_interface.get_node_info()
+    with _local_users_lock:
+        wifi_users = list(_local_users.keys())
+    return {
+        "online": True,
+        "gateway_id": _gateway_id,
+        "hostname": socket.gethostname(),
+        "ble": {
+            "client_count": ble.get("client_count", 0),
+            "gateway_id": ble.get("gateway_id", ""),
+            "advertising": ble.get("advertising", False),
+        },
+        "mesh": {
+            "connected": ble.get("mesh_connected", False),
+            "local_node": local_node.get("short_name") if local_node else None,
+            "peer_count": len(peers),
+            "peers": [p.get("short_name", p.get("id", "?")) for p in peers],
+        },
+        "wifi_users": wifi_users,
+        "ts": time.time(),
+    }
+
+
+def _publish_gateway_status_loop():
+    """Periodically publish this gateway's status to MQTT (retained)."""
+    time.sleep(5)  # wait for services to settle
+    while _client is not None:
+        try:
+            status = get_gateway_status()
+            _publish(f"mesh/gateway/{_gateway_id}/status", status, retain=True)
+        except Exception:
+            logger.debug("Could not publish gateway status")
+        time.sleep(GATEWAY_STATUS_INTERVAL)
 
 
 def _publish(topic, payload_dict, retain=False):

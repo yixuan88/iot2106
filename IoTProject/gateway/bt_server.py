@@ -258,18 +258,22 @@ def _run_full_measurement(ble_rtt_ms):
     except Exception:
         _publish_progress("serial", "error")
 
-    # Step 2: Mesh RTT (RPi ↔ RPi via LoRa)
+    # Step 2: Mesh RTT (RPi ↔ RPi via LoRa) — LoRa can take 15-20s
     _publish_progress("mesh", "measuring")
     try:
         pre_count = len(latency.get_mesh_samples())
         ping_id = latency.send_mesh_ping()
         if ping_id:
-            for _ in range(20):  # up to 10 seconds
+            for i in range(40):  # up to 20 seconds
                 time.sleep(0.5)
                 samples = latency.get_mesh_samples()
                 if len(samples) > pre_count:
                     results["mesh"] = samples[-1]
                     break
+                # Send a retry ping halfway through
+                if i == 20:
+                    latency.send_mesh_ping()
+                    _publish_progress("mesh", "retrying…")
             if results["mesh"]:
                 _publish_progress("mesh", "done", results["mesh"])
                 if results["serial"]:
@@ -280,7 +284,7 @@ def _run_full_measurement(ble_rtt_ms):
                     else:
                         _publish_progress("lora", "—")
             else:
-                _publish_progress("mesh", "no reply")
+                _publish_progress("mesh", "no reply (20s)")
         else:
             _publish_progress("mesh", "no connection")
     except Exception:

@@ -212,6 +212,7 @@
     <div id="lat-progress" style="display:none;padding:8px 12px;margin-bottom:8px;border-radius:8px;background:#FFF8E1;border:1px solid #FFB300;font-size:0.82rem;">
       <strong>Full measurement in progress (M5StickC)</strong>
       <div style="display:flex;gap:12px;margin-top:4px;" id="lat-progress-steps">
+        <span id="lp-wifi" class="lp-step">WiFi: —</span>
         <span id="lp-ble" class="lp-step">BLE: —</span>
         <span id="lp-serial" class="lp-step">Serial: —</span>
         <span id="lp-mesh" class="lp-step">Mesh: —</span>
@@ -264,6 +265,10 @@
       <label style="font-size:0.75rem;cursor:pointer;"><input type="checkbox" class="lat-line-toggle" data-hop="lora" checked> LoRa</label>
     </div>
     <canvas id="lat-line-chart" width="500" height="200" style="width:100%;max-width:500px;"></canvas>
+
+    <div class="section-header" style="margin-top:16px;">Path Comparison: WiFi vs BLE</div>
+    <div id="path-compare" style="font-size:0.82rem;color:#888;margin-bottom:6px;">Press long-A on M5StickC to measure both paths</div>
+    <canvas id="path-compare-chart" width="500" height="220" style="width:100%;max-width:500px;"></canvas>
   </div>
 
   <div class="section" id="file-section">
@@ -834,20 +839,47 @@
 
   /* ── Full measurement progress (MQTT real-time) ── */
   var latProgressTimer = null;
+  var fullMeasureWifiRtt = null;  // WiFi RTT measured during full chain
+  var lastFullResults = null;     // last complete results for comparison chart
 
   function handleLatencyProgress(msg) {
     var banner = document.getElementById('lat-progress');
     banner.style.display = 'block';
 
-    var stepMap = { ble: 'lp-ble', serial: 'lp-serial', mesh: 'lp-mesh', lora: 'lp-lora' };
+    var stepMap = { wifi: 'lp-wifi', ble: 'lp-ble', serial: 'lp-serial', mesh: 'lp-mesh', lora: 'lp-lora' };
     var step = msg.step;
     var status = msg.status;
     var value = msg.value;
 
+    // When BLE step arrives first, auto-measure WiFi in parallel
+    if (step === 'ble' && status === 'done') {
+      var wifiEl = document.getElementById('lp-wifi');
+      wifiEl.textContent = 'WiFi: measuring…';
+      wifiEl.className = 'lp-step lp-active';
+      fullMeasureWifiRtt = null;
+      (async function() {
+        try {
+          var t0 = performance.now();
+          var r = await fetch('/api/ping');
+          await r.json();
+          fullMeasureWifiRtt = Math.round(performance.now() - t0);
+          wifiEl.textContent = 'WiFi: ' + fullMeasureWifiRtt + 'ms';
+          wifiEl.className = 'lp-step lp-done';
+          wifiSamples.push(fullMeasureWifiRtt);
+          if (wifiSamples.length > 50) wifiSamples.shift();
+          fillRow('wifi', wifiSamples);
+        } catch(e) {
+          wifiEl.textContent = 'WiFi: error';
+          wifiEl.className = 'lp-step lp-fail';
+        }
+      })();
+    }
+
     if (step === 'complete') {
-      // All done — show final results, hide after 8s
       var r = msg.results || {};
-      ['ble', 'serial', 'mesh', 'lora'].forEach(function(h) {
+      r.wifi = fullMeasureWifiRtt;
+      lastFullResults = r;
+      ['wifi', 'ble', 'serial', 'mesh', 'lora'].forEach(function(h) {
         var el = document.getElementById(stepMap[h]);
         var v = r[h];
         el.textContent = h.toUpperCase() + ': ' + (v != null ? v + 'ms' : '—');
@@ -857,6 +889,7 @@
       banner.style.background = '#E8F5E9';
       banner.style.borderColor = '#4CAF50';
       loadLatency();
+      drawPathCompare(r);
       clearTimeout(latProgressTimer);
       latProgressTimer = setTimeout(function() {
         banner.style.display = 'none';
@@ -871,8 +904,8 @@
     var el = stepMap[step] ? document.getElementById(stepMap[step]) : null;
     if (!el) return;
 
-    if (status === 'measuring') {
-      el.textContent = step.toUpperCase() + ': measuring…';
+    if (status === 'measuring' || status === 'retrying…') {
+      el.textContent = step.toUpperCase() + ': ' + status;
       el.className = 'lp-step lp-active';
     } else if (status === 'done' && value != null) {
       el.textContent = step.toUpperCase() + ': ' + value + 'ms';
@@ -1069,6 +1102,122 @@
     });
   }
 
+  /* ── Path Comparison Chart ── */
+  function drawPathCompare(r) {
+    var canvas = document.getElementById('path-compare-chart');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = canvas.clientWidth * dpr;
+    canvas.height = 220 * dpr;
+    ctx.scale(dpr, dpr);
+    var W = canvas.clientWidth, H = 220;
+    ctx.clearRect(0, 0, W, H);
+
+    document.getElementById('path-compare').textContent = '';
+
+    // WiFi path: WiFi + Serial + LoRa + Serial = WiFi + Mesh
+    // BLE path:  BLE + Serial + LoRa + Serial = BLE + Mesh
+    var wifiHop = r.wifi || 0;
+    var bleHop = r.ble || 0;
+    var serialHop = r.serial || 0;
+    var meshHop = r.mesh || 0;
+    var loraHop = r.lora || 0;
+
+    // Two paths — each is a stacked bar of hops
+    var paths = [
+      {
+        label: 'WiFi Path',
+        sublabel: 'Browser → WiFi → RPi → Serial → ESP32 → LoRa → ESP32 → Serial → RPi',
+        hops: [
+          { name: 'WiFi', value: wifiHop, color: '#4285F4' },
+          { name: 'Serial', value: serialHop, color: '#FF9800' },
+          { name: 'LoRa', value: loraHop, color: '#EA4335' },
+          { name: 'Serial', value: serialHop, color: '#FF9800' },
+        ],
+      },
+      {
+        label: 'BLE Path',
+        sublabel: 'M5StickC → BLE → RPi → Serial → ESP32 → LoRa → ESP32 → Serial → RPi',
+        hops: [
+          { name: 'BLE', value: bleHop, color: '#9C27B0' },
+          { name: 'Serial', value: serialHop, color: '#FF9800' },
+          { name: 'LoRa', value: loraHop, color: '#EA4335' },
+          { name: 'Serial', value: serialHop, color: '#FF9800' },
+        ],
+      }
+    ];
+
+    var barH = 36;
+    var gap = 60;
+    var chartL = 85, chartR = W - 50;
+    var chartW = chartR - chartL;
+    var startY = 30;
+
+    // Find max total
+    var maxTotal = 0;
+    paths.forEach(function(p) {
+      var total = 0;
+      p.hops.forEach(function(h) { total += h.value; });
+      p.total = total;
+      if (total > maxTotal) maxTotal = total;
+    });
+    if (maxTotal === 0) {
+      ctx.fillStyle = '#aaa'; ctx.font = '12px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('No data — press long-A on M5StickC', W / 2, H / 2);
+      return;
+    }
+
+    paths.forEach(function(p, pi) {
+      var y = startY + pi * (barH + gap);
+
+      // Path label
+      ctx.fillStyle = '#333'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'right';
+      ctx.fillText(p.label, chartL - 8, y + barH / 2 + 4);
+
+      // Stacked bar
+      var x = chartL;
+      p.hops.forEach(function(h) {
+        if (h.value <= 0) return;
+        var w = (h.value / maxTotal) * chartW;
+        ctx.fillStyle = h.color;
+        ctx.fillRect(x, y, Math.max(w, 2), barH);
+
+        // Label inside bar if wide enough
+        if (w > 50) {
+          ctx.fillStyle = '#fff'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center';
+          ctx.fillText(h.name + ' ' + Math.round(h.value) + 'ms', x + w / 2, y + barH / 2 + 4);
+        } else if (w > 20) {
+          ctx.fillStyle = '#fff'; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
+          ctx.fillText(Math.round(h.value), x + w / 2, y + barH / 2 + 3);
+        }
+        x += w;
+      });
+
+      // Total label at end
+      ctx.fillStyle = '#333'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText(Math.round(p.total) + 'ms', x + 6, y + barH / 2 + 4);
+
+      // Sublabel below bar
+      ctx.fillStyle = '#999'; ctx.font = '10px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText(p.sublabel, chartL, y + barH + 14);
+    });
+
+    // Legend at bottom
+    var legendY = H - 10;
+    var lx = chartL;
+    ctx.font = '10px system-ui';
+    [
+      ['#4285F4', 'WiFi'], ['#9C27B0', 'BLE'], ['#FF9800', 'Serial'], ['#EA4335', 'LoRa']
+    ].forEach(function(item) {
+      ctx.fillStyle = item[0];
+      ctx.fillRect(lx, legendY - 8, 12, 10);
+      ctx.fillStyle = '#333'; ctx.textAlign = 'left';
+      ctx.fillText(item[1], lx + 15, legendY);
+      lx += ctx.measureText(item[1]).width + 30;
+    });
+  }
+
   /* ── Network Topology ── */
   var gateways = {};  // { gateway_id: status_object }
 
@@ -1185,16 +1334,6 @@
         _roundRect(ctx, cx - badgeW / 2, rowGw - gwH / 2 - 10, badgeW, badgeH, 8, true, true);
         ctx.fillStyle = '#1565C0'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center';
         ctx.fillText('THIS GATEWAY', cx, rowGw - gwH / 2 + 2);
-      }
-
-      // Mesh info below box
-      if (gw.mesh) {
-        var pLabel = meshOk
-          ? gw.mesh.peer_count + ' mesh peer' + (gw.mesh.peer_count !== 1 ? 's' : '')
-          : 'no mesh connection';
-        ctx.fillStyle = meshOk ? '#2E7D32' : '#C62828';
-        ctx.font = '11px system-ui'; ctx.textAlign = 'center';
-        ctx.fillText(pLabel, cx, rowGw + gwH / 2 + 14);
       }
 
       // ─── Connected devices ───

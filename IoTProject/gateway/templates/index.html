@@ -86,6 +86,16 @@
       background: none; align-self: center; max-width: 100%;
       color: #888; font-size: 0.78rem; font-style: italic; padding: 2px 0;
     }
+    .msg.priority { border: 2px solid #d32f2f; background: #ffebee; }
+    .msg.priority.tx { background: #d32f2f; color: #fff; }
+    .priority-label { color: #d32f2f; font-weight: 700; font-size: 0.72rem; }
+    #priority-banner {
+      background: #d32f2f; color: #fff; padding: 10px 16px;
+      font-weight: 600; font-size: 0.9rem; text-align: center;
+      animation: priority-pulse 1.5s ease-in-out 5;
+      display: none;
+    }
+    @keyframes priority-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
     .no-msgs { color: #aaa; font-size: 0.85rem; text-align: center; margin: auto; }
 
     /* ── Send bar ── */
@@ -187,6 +197,7 @@
       <div id="local-node-label" style="opacity:.8;"></div>
     </div>
   </header>
+  <div id="priority-banner"></div>
 
   <div id="topic-bar">
     <button id="join-btn">+ Join topic</button>
@@ -253,6 +264,8 @@
       <span><strong>BLE Clients:</strong> <span id="ble-clients">—</span></span>
       <span><strong>Gateway ID:</strong> <span id="ble-gw-id">—</span></span>
       <span><strong>Mesh:</strong> <span id="ble-mesh">—</span></span>
+      <span><strong>Reconnects:</strong> <span id="ble-reconnects">—</span></span>
+      <span><strong>Avg TTR:</strong> <span id="ble-avg-ttr">—</span></span>
     </div>
     <div class="section-header" style="margin-top:8px;">Latency Comparison</div>
     <canvas id="lat-bar-chart" width="500" height="180" style="width:100%;max-width:500px;"></canvas>
@@ -289,7 +302,7 @@
     <div class="section-header">Network Topology</div>
     <canvas id="topo-canvas" width="900" height="620" style="width:100%;max-width:900px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;"></canvas>
     <div id="topo-info" style="font-size:0.78rem;color:#555;margin-top:6px;">
-      <span id="topo-gw-count">0</span> gateway(s) online. Updates every 5s via MQTT + LoRa.
+      <span id="topo-gw-count">0</span> gateway(s) online. Local: 5s via MQTT. Remote: 60s via LoRa (150s expiry).
     </div>
   </div>
 
@@ -310,6 +323,7 @@
   let dmStore = {};
   let dmPeers = [];
   let progressPoller = null;
+  let msgAckStatus = {};   // { msg_id: 'sent' | 'delivered' }
 
   const VALID_USERNAME = /^[a-zA-Z0-9_-]{1,16}$/;
 
@@ -405,6 +419,10 @@
         handleGatewayStatus(msg);
       } else if (topic === 'mesh/latency/progress') {
         handleLatencyProgress(msg);
+      } else if (topic === 'mesh/ack/sent') {
+        handleAckSent(msg);
+      } else if (topic === 'mesh/ack/delivered') {
+        handleAckDelivered(msg);
       }
     });
 
@@ -426,6 +444,8 @@
     mqttClient.subscribe('mesh/file/notify/+');
     mqttClient.subscribe('mesh/gateway/+/status');
     mqttClient.subscribe('mesh/latency/progress');
+    mqttClient.subscribe('mesh/ack/sent');
+    mqttClient.subscribe('mesh/ack/delivered');
   }
 
   function setConnStatus(cls, label) {
@@ -524,22 +544,36 @@
   function buildMsgEl(msg) {
     var isMine = msg.from === username;
     var isDm = !!msg.isDm;
+    var isPriority = msg.text && msg.text.charAt(0) === '!';
+    var displayText = isPriority ? msg.text.substring(1).trim() : msg.text;
     var cls = isDm ? (isMine ? 'dm-tx' : 'dm-rx') : (isMine ? 'tx' : 'rx');
+    if (isPriority) cls += ' priority';
 
     var div = document.createElement('div');
     div.className = 'msg ' + cls;
 
     var badge = '';
-    if (isDm && isMine)    badge = '<div class="badge">DM \u2192 ' + escHtml(msg.to_user || '?') + '</div>';
-    if (isDm && !isMine)   badge = '<div class="badge">DM from ' + escHtml(msg.from) + '</div>';
-    if (!isDm && !isMine)  badge = '<div class="badge">' + escHtml(msg.from) + '</div>';
+    if (isPriority) badge += '<div class="priority-label">\u26A0 EMERGENCY</div>';
+    if (isDm && isMine)    badge += '<div class="badge">DM \u2192 ' + escHtml(msg.to_user || '?') + '</div>';
+    if (isDm && !isMine)   badge += '<div class="badge">DM from ' + escHtml(msg.from) + '</div>';
+    if (!isDm && !isMine)  badge += '<div class="badge">' + escHtml(msg.from) + '</div>';
 
     var ts = new Date((msg.ts || 0) * 1000).toLocaleTimeString();
     var signal = msg.rssi != null ? ' \xb7 RSSI ' + msg.rssi : '';
     var hops   = msg.hops > 0     ? ' \xb7 ' + msg.hops + ' hop' + (msg.hops > 1 ? 's' : '') : '';
     var meta   = isMine ? ts : ts + signal + hops;
 
-    div.innerHTML = badge + '<div>' + escHtml(msg.text) + '</div><div class="meta">' + meta + '</div>';
+    // Delivery ACK status for sent messages
+    var deliveryHtml = '';
+    if (isMine && msg._msg_id) {
+      div.dataset.msgid = msg._msg_id;
+      var ackStatus = msgAckStatus[msg._msg_id] || 'sent';
+      var ackColor = ackStatus === 'delivered' ? '#34a853' : '#999';
+      var ackIcon = ackStatus === 'delivered' ? '\u2713\u2713 delivered' : '\u2713 sent';
+      deliveryHtml = ' <span class="delivery" style="color:' + ackColor + '">' + ackIcon + '</span>';
+    }
+
+    div.innerHTML = badge + '<div>' + escHtml(displayText) + '</div><div class="meta">' + meta + deliveryHtml + '</div>';
     return div;
   }
 
@@ -556,6 +590,9 @@
     if (activeTopic === topicName) {
       appendMsg(msg);
     }
+    if (msg.text && msg.text.charAt(0) === '!' && msg.from !== username) {
+      showPriorityBanner(msg.from, msg.text.substring(1).trim());
+    }
   }
 
   function ingestDm(msg) {
@@ -565,6 +602,9 @@
     dmStore[peer].push(msg);
     openDmTab(peer);
     if (activeTopic === 'dm:' + peer) appendMsg(msg);
+    if (msg.text && msg.text.charAt(0) === '!' && msg.from !== username) {
+      showPriorityBanner(msg.from, msg.text.substring(1).trim());
+    }
   }
 
   function openDmTab(peer) {
@@ -596,6 +636,9 @@
       var payload = { v: 1, from: username, to_topic: activeTopic, text: text, ts: ts };
       mqttClient.publish('mesh/topic/' + activeTopic, JSON.stringify(payload));
     }
+    // Note: _msg_id is assigned server-side by mqtt_bridge when it sends over LoRa.
+    // The browser doesn't know the msg_id until ACK comes back — but messages from
+    // this gateway's own MQTT don't traverse LoRa, so ACK only applies to cross-gateway msgs.
     input.value = '';
   }
 
@@ -640,6 +683,40 @@
     div.textContent = ts + ' — ' + text;
     log.appendChild(div);
     log.scrollTop = log.scrollHeight;
+  }
+
+  function showPriorityBanner(from, text) {
+    var banner = document.getElementById('priority-banner');
+    banner.textContent = '\u26A0 EMERGENCY from ' + from + ': ' + text;
+    banner.style.display = 'block';
+    banner.style.animation = 'none';
+    banner.offsetHeight; // trigger reflow
+    banner.style.animation = 'priority-pulse 1.5s ease-in-out 5';
+    clearTimeout(banner._hideTimer);
+    banner._hideTimer = setTimeout(function() { banner.style.display = 'none'; }, 15000);
+  }
+
+  function handleAckSent(msg) {
+    if (!msg.msg_id) return;
+    msgAckStatus[msg.msg_id] = 'sent';
+    // Find the most recent sent message from this user and tag it with the msg_id
+    var log = document.getElementById('msg-log');
+    var myMsgs = log.querySelectorAll('.msg.tx:not([data-msgid]), .msg.dm-tx:not([data-msgid])');
+    if (myMsgs.length > 0) {
+      var last = myMsgs[myMsgs.length - 1];
+      last.dataset.msgid = msg.msg_id;
+      var meta = last.querySelector('.meta');
+      if (meta && !meta.querySelector('.delivery')) {
+        meta.insertAdjacentHTML('beforeend', ' <span class="delivery" style="color:#999">\u2713 sent via LoRa</span>');
+      }
+    }
+  }
+
+  function handleAckDelivered(msg) {
+    if (!msg.msg_id) return;
+    msgAckStatus[msg.msg_id] = 'delivered';
+    var el = document.querySelector('[data-msgid="' + msg.msg_id + '"] .delivery');
+    if (el) { el.textContent = '\u2713\u2713 delivered'; el.style.color = '#34a853'; }
   }
 
   function startDm(peer) {
@@ -1244,7 +1321,7 @@
     var now = Date.now();
     Object.keys(gateways).forEach(function(id) {
       var gw = gateways[id];
-      if (gw.online && (now - (gw._received || 0)) < 90000) {
+      if (gw.online && (now - (gw._received || 0)) < 150000) {
         gwList.push(gw);
       }
     });
@@ -1507,6 +1584,8 @@
       document.getElementById('ble-clients').textContent = s.client_count != null ? s.client_count : '—';
       document.getElementById('ble-gw-id').textContent = s.gateway_id || '—';
       document.getElementById('ble-mesh').textContent = s.mesh_connected ? 'Connected' : 'Offline';
+      document.getElementById('ble-reconnects').textContent = s.reconnect_count != null ? s.reconnect_count : '—';
+      document.getElementById('ble-avg-ttr').textContent = s.avg_ttr != null ? s.avg_ttr + 's' : '—';
       fillRowFromObj('ble', data.ble_rtt);
       fillRowFromObj('serial', data.serial_rtt);
       fillRowFromObj('mesh', data.mesh_rtt);

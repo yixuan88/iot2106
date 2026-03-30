@@ -3,6 +3,7 @@ import logging
 import socket
 import threading
 import time
+import uuid
 
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
@@ -23,6 +24,11 @@ _local_users_lock = threading.Lock()
 _status_thread = None
 _gateway_id = None
 _lora_paused = False  # pause LoRa broadcasts during mesh ping
+
+# Message delivery ACK tracking
+_pending_acks = {}        # {msg_id: timestamp_sent}
+_pending_acks_lock = threading.Lock()
+_ACK_EXPIRY = 120        # seconds before giving up on an ACK
 
 
 def start():
@@ -132,10 +138,14 @@ def _on_message(client, userdata, msg):
 def _handle_topic_message(topic_name, payload):
     sender = payload.get("from", "unknown")
     text = payload.get("text", "")
+    msg_id = uuid.uuid4().hex[:6]
 
     logger.info("→ LoRa [topic/%s] from %s: %r", topic_name, sender, text[:80])
-    wire = f"T|{sender}|{topic_name}|{text}"
+    wire = f"T|{sender}|{topic_name}|{msg_id}|{text}"
+    with _pending_acks_lock:
+        _pending_acks[msg_id] = time.time()
     _send_over_lora(wire)
+    _publish("mesh/ack/sent", {"msg_id": msg_id, "from": sender, "ts": time.time()})
 
 
 def _handle_dm_message(recipient, payload):
@@ -149,9 +159,13 @@ def _handle_dm_message(recipient, payload):
         logger.info("local DM %s → %s (broker delivery, no LoRa)", sender, recipient)
         return
 
+    msg_id = uuid.uuid4().hex[:6]
     logger.info("→ LoRa [DM] %s → %s: %r", sender, recipient, text[:80])
-    wire = f"D|{sender}|{recipient}|{text}"
+    wire = f"D|{sender}|{recipient}|{msg_id}|{text}"
+    with _pending_acks_lock:
+        _pending_acks[msg_id] = time.time()
     _send_over_lora(wire)
+    _publish("mesh/ack/sent", {"msg_id": msg_id, "from": sender, "ts": time.time()})
 
 
 def _handle_presence(username, payload):
@@ -201,6 +215,15 @@ def _route_incoming_text(raw_text, from_id, rssi, snr, hops):
     if raw_text.startswith("MESHPING:") or raw_text.startswith("MESHPONG:"):
         return
 
+    # Delivery ACK received
+    if raw_text.startswith("A|"):
+        msg_id = raw_text[2:]
+        with _pending_acks_lock:
+            _pending_acks.pop(msg_id, None)
+        _publish("mesh/ack/delivered", {"msg_id": msg_id, "ts": time.time()})
+        logger.info("ACK received for msg %s", msg_id)
+        return
+
     # Remote gateway status — republish to local MQTT for the topology view
     if raw_text.startswith("G|"):
         try:
@@ -235,12 +258,23 @@ def _route_incoming_text(raw_text, from_id, rssi, snr, hops):
     ts = time.time()
 
     if raw_text.startswith("T|") or raw_text.startswith("D|"):
-        parts = raw_text.split("|", 3)
-        if len(parts) < 4:
+        # New format: T|sender|dest|msg_id|text  (5 fields)
+        # Old format: T|sender|dest|text          (4 fields)
+        parts = raw_text.split("|", 4)
+        msg_id = None
+        if len(parts) == 5:
+            msg_type, sender, dest, msg_id, text = parts
+        elif len(parts) == 4:
+            msg_type, sender, dest, text = parts
+        else:
             logger.warning("Malformed LoRa wire message: %s", raw_text[:60])
             return
 
-        msg_type, sender, dest, text = parts
+        # Send ACK back if we got a msg_id
+        if msg_id:
+            _send_over_lora(f"A|{msg_id}")
+            logger.debug("Sent ACK for msg %s", msg_id)
+
         payload = {
             "v": 1,
             "from": sender,
@@ -329,6 +363,13 @@ def _publish_gateway_status_loop():
                 pass  # no mesh connection
             except Exception:
                 logger.debug("Could not broadcast gateway status over LoRa")
+
+        # Prune stale pending ACKs
+        now = time.time()
+        with _pending_acks_lock:
+            expired = [k for k, v in _pending_acks.items() if now - v > _ACK_EXPIRY]
+            for k in expired:
+                del _pending_acks[k]
 
         time.sleep(GATEWAY_STATUS_INTERVAL)
 

@@ -55,6 +55,8 @@ const char* PRESETS[] = {
     "On my way",
     "Message received",
     "Stand by",
+    "!EMERGENCY - Need help",
+    "!Evacuate now",
 };
 const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
@@ -75,6 +77,7 @@ static bool doConnect   = false;
 static bool isConnected = false;
 
 String msgLog[MSG_ROWS];
+bool   msgPriority[MSG_ROWS] = {false};
 int    msgCount  = 0;
 int    presetIdx = 0;
 
@@ -99,12 +102,20 @@ bool          longPressHandled = false;  // prevent short press after long press
 void redraw();  // forward declaration needed by pushLine
 
 void pushLine(const String& line) {
+    // Detect priority: incoming messages look like "[sender] !text"
+    bool isPriority = (line.indexOf("] !") > 0);
     String display = line.length() > 20 ? line.substring(0, 20) : line;
     if (msgCount < MSG_ROWS) {
-        msgLog[msgCount++] = display;
+        msgLog[msgCount] = display;
+        msgPriority[msgCount] = isPriority;
+        msgCount++;
     } else {
-        for (int i = 0; i < MSG_ROWS - 1; i++) msgLog[i] = msgLog[i + 1];
+        for (int i = 0; i < MSG_ROWS - 1; i++) {
+            msgLog[i] = msgLog[i + 1];
+            msgPriority[i] = msgPriority[i + 1];
+        }
         msgLog[MSG_ROWS - 1] = display;
+        msgPriority[MSG_ROWS - 1] = isPriority;
     }
     redraw();
 }
@@ -114,8 +125,8 @@ void redraw() {
 
     // Message log at size 2 (16px per row)
     M5.Lcd.setTextSize(2);
-    M5.Lcd.setTextColor(WHITE, BLACK);
     for (int i = 0; i < msgCount; i++) {
+        M5.Lcd.setTextColor(msgPriority[i] ? RED : WHITE, BLACK);
         M5.Lcd.setCursor(0, i * 16);
         M5.Lcd.print(msgLog[i]);
     }

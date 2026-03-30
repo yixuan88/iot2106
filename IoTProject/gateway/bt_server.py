@@ -43,6 +43,13 @@ _latency_samples: list = []       # Recent BLE RTT measurements (ms)
 _latency_lock = threading.Lock()
 MAX_LATENCY_SAMPLES = 50
 
+# Reconnection tracking
+_reconnect_count = 0
+_last_disconnect_ts = None
+_reconnect_times: list = []       # time-to-reconnect in seconds
+_reconnect_lock = threading.Lock()
+MAX_RECONNECT_SAMPLES = 50
+
 
 # -- BlueZ setup ---------------------------------------------------------------
 
@@ -379,11 +386,16 @@ def set_mesh_connected(connected: bool):
 
 def get_status() -> dict:
     """Return current BLE status for the web API."""
+    with _reconnect_lock:
+        samples = list(_reconnect_times)
     return {
         "advertising": _advert is not None,
         "gateway_id": f"0x{_gateway_id:04X}",
         "client_count": _client_count,
         "mesh_connected": _mesh_connected,
+        "reconnect_count": _reconnect_count,
+        "avg_ttr": round(sum(samples) / len(samples), 2) if samples else None,
+        "last_ttr": samples[-1] if samples else None,
     }
 
 
@@ -415,9 +427,21 @@ def _on_dbus_message(msg):
     if connected:
         _client_count += 1
         logger.info("BLE client connected (total: %d)", _client_count)
+        # Track reconnection time
+        with _reconnect_lock:
+            global _reconnect_count, _last_disconnect_ts
+            if _last_disconnect_ts is not None:
+                ttr = round(time.time() - _last_disconnect_ts, 2)
+                _reconnect_times.append(ttr)
+                _reconnect_times[:] = _reconnect_times[-MAX_RECONNECT_SAMPLES:]
+                _reconnect_count += 1
+                _last_disconnect_ts = None
+                logger.info("BLE reconnected in %.2fs (total reconnects: %d)", ttr, _reconnect_count)
     else:
         _client_count = max(0, _client_count - 1)
         logger.info("BLE client disconnected (total: %d)", _client_count)
+        with _reconnect_lock:
+            _last_disconnect_ts = time.time()
     # Refresh beacon with updated client count
     if _loop:
         asyncio.run_coroutine_threadsafe(_refresh_advertisement(), _loop)

@@ -49,6 +49,11 @@ def main():  # wires up all components and starts the flask web server
         default=False,
         help="Enable MQTT bridge for WiFi chat clients (requires mosquitto broker)",
     )
+    parser.add_argument(
+        "--zone",
+        default=None,
+        help="Location zone name for this gateway (e.g. 'Building A', 'North Wing')",
+    )
     args = parser.parse_args()
 
     store = MessageStore()
@@ -124,6 +129,9 @@ def main():  # wires up all components and starts the flask web server
     # Update BLE beacon with mesh connection status
     if args.bluetooth:
         bt_server.set_mesh_connected(mesh_connected)
+
+    if args.zone:
+        mqtt_bridge.set_zone(args.zone)
 
     if args.mqtt:
         mqtt_bridge.start()

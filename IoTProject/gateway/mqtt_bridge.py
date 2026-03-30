@@ -24,11 +24,19 @@ _local_users_lock = threading.Lock()
 _status_thread = None
 _gateway_id = None
 _lora_paused = False  # pause LoRa broadcasts during mesh ping
+_zone = "Building A"  # location zone name for this gateway
 
 # Message delivery ACK tracking
 _pending_acks = {}        # {msg_id: timestamp_sent}
 _pending_acks_lock = threading.Lock()
 _ACK_EXPIRY = 120        # seconds before giving up on an ACK
+
+
+def set_zone(zone_name):
+    """Set the location zone for this gateway."""
+    global _zone
+    _zone = zone_name
+    logger.info("Gateway zone set to: %s", zone_name)
 
 
 def start():
@@ -79,6 +87,8 @@ def publish_text(text, sender="ble_client", topic="general"):
         "text": text,
         "ts": time.time(),
     }
+    if _zone:
+        payload["zone"] = _zone
     _publish(f"mesh/topic/{topic}", payload)
     logger.info("BLE text forwarded to MQTT topic/%s: %s", topic, text[:80])
 
@@ -249,6 +259,8 @@ def _route_incoming_text(raw_text, from_id, rssi, snr, hops):
                 "wifi_users": compact.get("wu", []),
                 "ts": time.time(),
             }
+            if compact.get("zn"):
+                status["zone"] = compact["zn"]
             _publish(f"mesh/gateway/{remote_id}/status", status, retain=True)
             logger.info("Remote gateway %s status received via LoRa, published locally", remote_id)
         except (json.JSONDecodeError, KeyError):
@@ -320,7 +332,7 @@ def get_gateway_status():
     with _local_users_lock:
         # Exclude BLE-device from WiFi users — it's tracked via ble.client_count
         wifi_users = [u for u in _local_users.keys() if u != "BLE-device"]
-    return {
+    status = {
         "online": True,
         "gateway_id": _gateway_id,
         "hostname": socket.gethostname(),
@@ -338,6 +350,9 @@ def get_gateway_status():
         "wifi_users": wifi_users,
         "ts": time.time(),
     }
+    if _zone:
+        status["zone"] = _zone
+    return status
 
 
 def _publish_gateway_status_loop():
@@ -382,7 +397,7 @@ def _build_compact_status():
     peers = mesh_interface.get_node_info()
     with _local_users_lock:
         wifi_users = [u for u in _local_users.keys() if u != "BLE-device"]
-    return json.dumps({
+    compact = {
         "id": _gateway_id,
         "bl": ble.get("client_count", 0),
         "bx": ble.get("gateway_id", ""),
@@ -390,7 +405,10 @@ def _build_compact_status():
         "mn": local_node.get("short_name") if local_node else None,
         "mp": len(peers),
         "wu": wifi_users[:5],  # cap to keep message small
-    }, separators=(',', ':'))
+    }
+    if _zone:
+        compact["zn"] = _zone
+    return json.dumps(compact, separators=(',', ':'))
 
 
 def _publish(topic, payload_dict, retain=False):

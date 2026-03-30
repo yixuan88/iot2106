@@ -324,6 +324,7 @@
   let dmPeers = [];
   let progressPoller = null;
   let msgAckStatus = {};   // { msg_id: 'sent' | 'delivered' }
+  let localZone = null;    // this gateway's location zone
 
   const VALID_USERNAME = /^[a-zA-Z0-9_-]{1,16}$/;
 
@@ -557,6 +558,7 @@
     if (isDm && isMine)    badge += '<div class="badge">DM \u2192 ' + escHtml(msg.to_user || '?') + '</div>';
     if (isDm && !isMine)   badge += '<div class="badge">DM from ' + escHtml(msg.from) + '</div>';
     if (!isDm && !isMine)  badge += '<div class="badge">' + escHtml(msg.from) + '</div>';
+    if (msg.zone) badge += '<div class="badge" style="background:rgba(211,47,47,.15);color:#C62828;">\u25B2 ' + escHtml(msg.zone) + '</div>';
 
     var ts = new Date((msg.ts || 0) * 1000).toLocaleTimeString();
     var signal = msg.rssi != null ? ' \xb7 RSSI ' + msg.rssi : '';
@@ -630,10 +632,12 @@
     if (activeTopic.startsWith('dm:')) {
       var peer = activeTopic.slice(3);
       var dmPayload = { v: 1, from: username, to_user: peer, text: text, ts: ts, isDm: true };
+      if (localZone) dmPayload.zone = localZone;
       mqttClient.publish('mesh/dm/' + peer, JSON.stringify(dmPayload));
       ingestDm(dmPayload);
     } else {
       var payload = { v: 1, from: username, to_topic: activeTopic, text: text, ts: ts };
+      if (localZone) payload.zone = localZone;
       mqttClient.publish('mesh/topic/' + activeTopic, JSON.stringify(payload));
     }
     // Note: _msg_id is assigned server-side by mqtt_bridge when it sends over LoRa.
@@ -1447,6 +1451,12 @@
       ctx.fillStyle = '#666'; ctx.font = '10px system-ui';
       ctx.fillText('BLE: ' + (gw.ble ? gw.ble.gateway_id : '—'), cx, gwY + 16);
 
+      // Zone label (if set)
+      if (gw.zone) {
+        ctx.fillStyle = '#D32F2F'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center';
+        ctx.fillText('\u25B2 ' + gw.zone, cx, gwY + gwH / 2 + 12);
+      }
+
       // THIS GATEWAY badge
       if (isLocal) {
         ctx.fillStyle = '#fff'; ctx.strokeStyle = '#1565C0'; ctx.lineWidth = 1;
@@ -1569,6 +1579,7 @@
       if (data.gateway_id) {
         data._received = Date.now();
         gateways[data.gateway_id] = data;
+        if (data.zone) localZone = data.zone;
         drawTopology();
       }
     }).catch(function(){});

@@ -131,7 +131,7 @@ def _create_advertisement() -> Advertisement:
     """Create a BLE advertisement with NUS service UUID and beacon data."""
     try:
         return Advertisement(
-            "GatewayBLE",
+            "GatewayBLE-1",
             [NUS_SERVICE_UUID],
             appearance=0x0000,
             timeout=0,
@@ -141,7 +141,7 @@ def _create_advertisement() -> Advertisement:
         # Fallback: library version may not support manufacturer_data
         logger.warning("BLE: manufacturer_data not supported, advertising without beacon")
         return Advertisement(
-            "GatewayBLE",
+            "GatewayBLE-1",
             [NUS_SERVICE_UUID],
             appearance=0x0000,
             timeout=0,

@@ -287,7 +287,7 @@
 
   <div class="section">
     <div class="section-header">Network Topology</div>
-    <canvas id="topo-canvas" width="800" height="480" style="width:100%;max-width:800px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;"></canvas>
+    <canvas id="topo-canvas" width="900" height="620" style="width:100%;max-width:900px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;"></canvas>
     <div id="topo-info" style="font-size:0.78rem;color:#555;margin-top:6px;">
       <span id="topo-gw-count">0</span> gateway(s) online. Updates every 5s via MQTT + LoRa.
     </div>
@@ -1233,7 +1233,7 @@
     if (!canvas) return;
     var ctx = canvas.getContext('2d');
     var dpr = window.devicePixelRatio || 1;
-    var H = 480;
+    var H = 620;
     canvas.width = canvas.clientWidth * dpr;
     canvas.height = H * dpr;
     ctx.scale(dpr, dpr);
@@ -1244,7 +1244,7 @@
     var now = Date.now();
     Object.keys(gateways).forEach(function(id) {
       var gw = gateways[id];
-      if (gw.online && (now - (gw._received || 0)) < 20000) {
+      if (gw.online && (now - (gw._received || 0)) < 90000) {
         gwList.push(gw);
       }
     });
@@ -1257,83 +1257,126 @@
       return;
     }
 
-    // ── Layout rows ──
-    var rowCloud = 45;
-    var rowEsp   = 125;
-    var rowGw    = 210;
-    var rowDev   = 370;
-    var rowLegend = H - 15;
+    // ── 2x2 grid positions for up to 4 gateways ──
+    // Cloud in center, gateways in corners, devices below each gateway
+    var cloudCx = W / 2, cloudCy = H / 2 - 40;
+    var cloudRx = 90, cloudRy = 50;
 
-    // ── LoRa mesh cloud ──
-    var cloudRx = Math.min((W - 40) / 2, 100 + gwList.length * 100);
+    // Compute gateway positions in a ring around the cloud
+    var positions = [];
+    if (gwList.length === 1) {
+      positions = [{ x: W / 2, y: cloudCy + 160 }];
+    } else if (gwList.length === 2) {
+      positions = [
+        { x: W * 0.25, y: cloudCy + 160 },
+        { x: W * 0.75, y: cloudCy + 160 },
+      ];
+    } else if (gwList.length === 3) {
+      positions = [
+        { x: W * 0.2, y: cloudCy + 160 },
+        { x: W * 0.5, y: cloudCy + 160 },
+        { x: W * 0.8, y: cloudCy + 160 },
+      ];
+    } else {
+      // 4 gateways: 2x2 grid around the cloud
+      positions = [
+        { x: W * 0.22, y: cloudCy - 130 },  // top-left
+        { x: W * 0.78, y: cloudCy - 130 },  // top-right
+        { x: W * 0.22, y: cloudCy + 160 },  // bottom-left
+        { x: W * 0.78, y: cloudCy + 160 },  // bottom-right
+      ];
+    }
+
+    // ── LoRa mesh cloud (center) ──
     ctx.fillStyle = '#E8F5E9'; ctx.strokeStyle = '#4CAF50'; ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.ellipse(W / 2, rowCloud, cloudRx, 32, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#1B5E20'; ctx.font = 'bold 15px system-ui'; ctx.textAlign = 'center';
-    ctx.fillText('LoRa Mesh Network', W / 2, rowCloud + 6);
+    ctx.beginPath(); ctx.ellipse(cloudCx, cloudCy, cloudRx, cloudRy, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#1B5E20'; ctx.font = 'bold 14px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText('LoRa Mesh', cloudCx, cloudCy - 6);
+    ctx.fillText('Network', cloudCx, cloudCy + 12);
 
-    // ── Per-gateway columns ──
-    var colW = W / (gwList.length + 1);
+    // ── Draw LoRa links from each gateway to cloud ──
+    var espPositions = [];  // store ESP32 positions for LoRa link lines
 
     gwList.forEach(function(gw, idx) {
-      var cx = colW * (idx + 1);
+      if (idx >= positions.length) return;
+      var pos = positions[idx];
+      var cx = pos.x;
+      var gwY = pos.y;
       var isLocal = (gw.hostname === window.location.hostname || gw.gateway_id === window.location.hostname);
       var meshOk = gw.mesh && gw.mesh.connected;
+      var isTop = gwY < cloudCy;
 
-      // ─── Line: cloud → ESP32 ───
+      // ESP32 sits between cloud and gateway
+      var espY = isTop ? gwY + 80 : gwY - 80;
+
+      espPositions.push({ x: cx, y: espY, meshOk: meshOk });
+
+      // ─── Line: cloud → ESP32 (LoRa) ───
+      var cloudEdgeY = isTop ? cloudCy - cloudRy : cloudCy + cloudRy;
       ctx.strokeStyle = meshOk ? '#4CAF50' : '#EF5350';
       ctx.lineWidth = 2;
       ctx.setLineDash(meshOk ? [] : [6, 4]);
-      ctx.beginPath(); ctx.moveTo(cx, rowCloud + 34); ctx.lineTo(cx, rowEsp - 18); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx, cloudEdgeY);
+      ctx.lineTo(cx, isTop ? espY + 18 : espY - 18);
+      ctx.stroke();
       ctx.setLineDash([]);
+
+      // LoRa label on cloud→ESP32 line
+      var loraLabelY = (cloudEdgeY + (isTop ? espY + 18 : espY - 18)) / 2;
+      ctx.fillStyle = '#E8F5E9';
+      _roundRect(ctx, cx - 22, loraLabelY - 8, 44, 16, 4, true, false);
+      ctx.fillStyle = '#1B5E20'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('LoRa', cx, loraLabelY + 4);
 
       // ─── ESP32 box ───
       var espName = (gw.mesh && gw.mesh.local_node) ? gw.mesh.local_node : '—';
       ctx.fillStyle = '#FFF3E0'; ctx.strokeStyle = '#EF6C00'; ctx.lineWidth = 2;
-      _roundRect(ctx, cx - 50, rowEsp - 18, 100, 36, 8, true, true);
-      // Icon label
-      ctx.fillStyle = '#BF360C'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
-      ctx.fillText('ESP32', cx, rowEsp - 2);
-      ctx.fillStyle = '#E65100'; ctx.font = '11px system-ui';
-      ctx.fillText(espName, cx, rowEsp + 14);
+      _roundRect(ctx, cx - 45, espY - 16, 90, 32, 7, true, true);
+      ctx.fillStyle = '#BF360C'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('ESP32', cx, espY - 1);
+      ctx.fillStyle = '#E65100'; ctx.font = '10px system-ui';
+      ctx.fillText(espName, cx, espY + 12);
 
-      // USB Serial label
-      ctx.fillStyle = '#EF6C00'; ctx.font = '10px system-ui'; ctx.textAlign = 'center';
-      ctx.fillText('USB Serial', cx + 56, (rowEsp + 18 + rowGw - 30) / 2 + 3);
-
-      // ─── Line: ESP32 → Gateway ───
+      // ─── Line: ESP32 → Gateway (USB Serial) ───
+      var serialStartY = isTop ? espY - 16 : espY + 16;
+      var serialEndY = isTop ? gwY + 28 : gwY - 28;
       ctx.strokeStyle = '#EF6C00'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(cx, rowEsp + 18); ctx.lineTo(cx, rowGw - 30); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx, serialStartY); ctx.lineTo(cx, serialEndY); ctx.stroke();
+      // Serial label
+      var serialLabelY = (serialStartY + serialEndY) / 2;
+      ctx.fillStyle = '#EF6C00'; ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText('USB', cx + 6, serialLabelY - 2);
 
       // ─── Gateway box ───
-      var gwW = 150, gwH = 60;
-      // Shadow
+      var gwW = 140, gwH = 55;
       ctx.fillStyle = 'rgba(0,0,0,0.08)';
-      _roundRect(ctx, cx - gwW / 2 + 3, rowGw - gwH / 2 + 3, gwW, gwH, 12, true, false);
-      // Box
+      _roundRect(ctx, cx - gwW / 2 + 3, gwY - gwH / 2 + 3, gwW, gwH, 10, true, false);
       ctx.fillStyle = isLocal ? '#BBDEFB' : '#FFF8E1';
       ctx.strokeStyle = isLocal ? '#1565C0' : '#F57F17';
       ctx.lineWidth = 3;
-      _roundRect(ctx, cx - gwW / 2, rowGw - gwH / 2, gwW, gwH, 12, true, true);
+      _roundRect(ctx, cx - gwW / 2, gwY - gwH / 2, gwW, gwH, 10, true, true);
 
-      // RPi icon
-      ctx.fillStyle = '#C62828'; ctx.font = '10px system-ui'; ctx.textAlign = 'left';
-      ctx.fillText('RPi', cx - gwW / 2 + 10, rowGw - 12);
+      // RPi label
+      ctx.fillStyle = '#C62828'; ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText('RPi', cx - gwW / 2 + 8, gwY - 12);
 
       // Gateway name
-      ctx.fillStyle = '#111'; ctx.font = 'bold 14px system-ui'; ctx.textAlign = 'center';
-      ctx.fillText(gw.gateway_id, cx, rowGw + 2);
+      ctx.fillStyle = '#111'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'center';
+      var gwName = gw.gateway_id.length > 14 ? gw.gateway_id.substring(0, 13) + '..' : gw.gateway_id;
+      ctx.fillText(gwName, cx, gwY + 2);
 
       // BLE ID
-      ctx.fillStyle = '#666'; ctx.font = '11px system-ui';
-      ctx.fillText('BLE: ' + (gw.ble ? gw.ble.gateway_id : '—'), cx, rowGw + 18);
+      ctx.fillStyle = '#666'; ctx.font = '10px system-ui';
+      ctx.fillText('BLE: ' + (gw.ble ? gw.ble.gateway_id : '—'), cx, gwY + 16);
 
-      // This gateway badge
+      // THIS GATEWAY badge
       if (isLocal) {
         ctx.fillStyle = '#fff'; ctx.strokeStyle = '#1565C0'; ctx.lineWidth = 1;
-        var badgeW = 75, badgeH = 16;
-        _roundRect(ctx, cx - badgeW / 2, rowGw - gwH / 2 - 10, badgeW, badgeH, 8, true, true);
-        ctx.fillStyle = '#1565C0'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center';
-        ctx.fillText('THIS GATEWAY', cx, rowGw - gwH / 2 + 2);
+        var badgeW = 75, badgeH = 14;
+        _roundRect(ctx, cx - badgeW / 2, gwY - gwH / 2 - 9, badgeW, badgeH, 6, true, true);
+        ctx.fillStyle = '#1565C0'; ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center';
+        ctx.fillText('THIS GATEWAY', cx, gwY - gwH / 2 + 1);
       }
 
       // ─── Connected devices ───
@@ -1346,96 +1389,82 @@
         devices.push({ name: u, type: 'wifi' });
       });
 
+      // Devices go on the side away from the cloud
+      var devBaseY = isTop ? gwY - gwH / 2 - 55 : gwY + gwH / 2 + 55;
+
       if (devices.length === 0) {
-        ctx.fillStyle = '#bbb'; ctx.font = '12px system-ui'; ctx.textAlign = 'center';
-        ctx.fillText('no clients connected', cx, rowDev);
+        ctx.fillStyle = '#bbb'; ctx.font = '10px system-ui'; ctx.textAlign = 'center';
+        ctx.fillText('no clients', cx, devBaseY);
         return;
       }
 
-      var devW = 100, devH = 36;
-      var gap = 20;
-      var totalW = devices.length * devW + (devices.length - 1) * gap;
-      var startX = cx - totalW / 2 + devW / 2;
+      var devW = 85, devH = 30;
+      var devGap = 10;
+      var totalDevW = devices.length * devW + (devices.length - 1) * devGap;
+      var devStartX = cx - totalDevW / 2 + devW / 2;
 
       devices.forEach(function(dev, di) {
-        var dx = startX + di * (devW + gap);
-        var dy = rowDev;
+        var dx = devStartX + di * (devW + devGap);
+        var dy = devBaseY;
         var isBle = dev.type === 'ble';
 
         // Connection line
         ctx.strokeStyle = isBle ? '#7B1FA2' : '#1565C0';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 3]);
+        var lineStartY = isTop ? gwY - gwH / 2 : gwY + gwH / 2;
+        var lineEndY = isTop ? dy + devH / 2 : dy - devH / 2;
         ctx.beginPath();
-        ctx.moveTo(cx, rowGw + gwH / 2);
-        ctx.bezierCurveTo(cx, rowGw + gwH / 2 + 40, dx, dy - devH / 2 - 30, dx, dy - devH / 2);
+        ctx.moveTo(cx, lineStartY);
+        ctx.bezierCurveTo(cx, lineStartY + (lineEndY - lineStartY) * 0.4,
+                          dx, lineEndY - (lineEndY - lineStartY) * 0.4,
+                          dx, lineEndY);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Protocol badge on line
-        var badgeMidY = (rowGw + gwH / 2 + dy - devH / 2) / 2;
+        // Protocol badge
+        var badgeMidY = (lineStartY + lineEndY) / 2;
         var badgeMidX = (cx + dx) / 2;
-        ctx.fillStyle = isBle ? '#7B1FA2' : '#1565C0';
-        ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center';
         var protoLabel = isBle ? 'BLE' : 'WiFi';
-        var tw = ctx.measureText(protoLabel).width + 8;
+        var tw = ctx.measureText(protoLabel).width + 6;
         ctx.fillStyle = '#fff';
-        _roundRect(ctx, badgeMidX - tw / 2, badgeMidY - 8, tw, 15, 4, true, false);
+        _roundRect(ctx, badgeMidX - tw / 2, badgeMidY - 7, tw, 13, 3, true, false);
         ctx.fillStyle = isBle ? '#7B1FA2' : '#1565C0';
-        ctx.fillText(protoLabel, badgeMidX, badgeMidY + 4);
+        ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center';
+        ctx.fillText(protoLabel, badgeMidX, badgeMidY + 3);
 
-        // Device box shadow
-        ctx.fillStyle = 'rgba(0,0,0,0.06)';
-        _roundRect(ctx, dx - devW / 2 + 2, dy - devH / 2 + 2, devW, devH, 8, true, false);
         // Device box
+        ctx.fillStyle = 'rgba(0,0,0,0.05)';
+        _roundRect(ctx, dx - devW / 2 + 2, dy - devH / 2 + 2, devW, devH, 6, true, false);
         ctx.fillStyle = isBle ? '#F3E5F5' : '#E3F2FD';
         ctx.strokeStyle = isBle ? '#7B1FA2' : '#1565C0';
-        ctx.lineWidth = 2;
-        _roundRect(ctx, dx - devW / 2, dy - devH / 2, devW, devH, 8, true, true);
+        ctx.lineWidth = 1.5;
+        _roundRect(ctx, dx - devW / 2, dy - devH / 2, devW, devH, 6, true, true);
 
-        // Device icon + label
         ctx.fillStyle = isBle ? '#4A148C' : '#0D47A1';
-        ctx.font = '9px system-ui'; ctx.textAlign = 'center';
-        ctx.fillText(isBle ? 'BLE Client' : 'WiFi Client', dx, dy - 5);
-        ctx.fillStyle = '#111'; ctx.font = 'bold 12px system-ui';
-        var label = dev.name.length > 12 ? dev.name.substring(0, 11) + '..' : dev.name;
-        ctx.fillText(label, dx, dy + 12);
+        ctx.font = '8px system-ui'; ctx.textAlign = 'center';
+        ctx.fillText(isBle ? 'BLE Client' : 'WiFi Client', dx, dy - 4);
+        ctx.fillStyle = '#111'; ctx.font = 'bold 10px system-ui';
+        var label = dev.name.length > 10 ? dev.name.substring(0, 9) + '..' : dev.name;
+        ctx.fillText(label, dx, dy + 10);
       });
     });
 
-    // ── LoRa links between gateways ──
-    if (gwList.length > 1) {
-      for (var i = 0; i < gwList.length - 1; i++) {
-        var x1 = colW * (i + 1) + 75;
-        var x2 = colW * (i + 2) - 75;
-        var midGwY = rowGw;
-        // Thick dashed line
-        ctx.strokeStyle = '#388E3C'; ctx.lineWidth = 3; ctx.setLineDash([10, 6]);
-        ctx.beginPath(); ctx.moveTo(x1, midGwY); ctx.lineTo(x2, midGwY); ctx.stroke();
-        ctx.setLineDash([]);
-        // LoRa label with background
-        var loraX = (x1 + x2) / 2;
-        ctx.fillStyle = '#E8F5E9';
-        _roundRect(ctx, loraX - 28, midGwY - 12, 56, 18, 4, true, false);
-        ctx.fillStyle = '#1B5E20'; ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
-        ctx.fillText('LoRa', loraX, midGwY + 2);
-      }
-    }
-
     // ── Legend ──
-    ctx.font = '11px system-ui'; ctx.textAlign = 'left';
+    var rowLegend = H - 12;
+    ctx.font = '10px system-ui'; ctx.textAlign = 'left';
     var lx = 16;
     [
-      ['#7B1FA2', 'BLE Connection'],
-      ['#1565C0', 'WiFi Connection'],
-      ['#388E3C', 'LoRa Mesh Link'],
+      ['#7B1FA2', 'BLE'],
+      ['#1565C0', 'WiFi'],
+      ['#388E3C', 'LoRa Mesh'],
       ['#EF6C00', 'USB Serial']
     ].forEach(function(item) {
       ctx.fillStyle = item[0];
-      _roundRect(ctx, lx, rowLegend - 9, 14, 14, 3, true, false);
+      _roundRect(ctx, lx, rowLegend - 8, 12, 12, 3, true, false);
       ctx.fillStyle = '#333';
-      ctx.fillText(item[1], lx + 18, rowLegend + 3);
-      lx += ctx.measureText(item[1]).width + 36;
+      ctx.fillText(item[1], lx + 15, rowLegend + 2);
+      lx += ctx.measureText(item[1]).width + 28;
     });
   }
 

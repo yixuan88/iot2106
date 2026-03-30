@@ -15,13 +15,14 @@ BROKER_HOST = "127.0.0.1"
 BROKER_PORT = 1883
 MAX_LORA_BYTES = 228
 GATEWAY_STATUS_INTERVAL = 5   # local MQTT publish interval (seconds)
-LORA_STATUS_INTERVAL = 10     # LoRa broadcast interval (seconds)
+LORA_STATUS_INTERVAL = 60     # LoRa broadcast interval (seconds)
 
 _client = None
 _local_users = {}
 _local_users_lock = threading.Lock()
 _status_thread = None
 _gateway_id = None
+_lora_paused = False  # pause LoRa broadcasts during mesh ping
 
 
 def start():
@@ -318,7 +319,7 @@ def _publish_gateway_status_loop():
 
         # Every LORA_STATUS_INTERVAL, also broadcast over LoRa mesh
         lora_counter += GATEWAY_STATUS_INTERVAL
-        if lora_counter >= LORA_STATUS_INTERVAL:
+        if lora_counter >= LORA_STATUS_INTERVAL and not _lora_paused:
             lora_counter = 0
             try:
                 compact = _build_compact_status()

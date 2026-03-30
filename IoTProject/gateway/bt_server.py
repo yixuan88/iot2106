@@ -258,9 +258,11 @@ def _run_full_measurement(ble_rtt_ms):
     except Exception:
         _publish_progress("serial", "error")
 
-    # Step 2: Mesh RTT (RPi ↔ RPi via LoRa) — LoRa can take 15-20s
+    # Step 2: Mesh RTT (RPi ↔ RPi via LoRa) — pause LoRa broadcasts to free the channel
     _publish_progress("mesh", "measuring")
+    mqtt_bridge._lora_paused = True
     try:
+        time.sleep(1)  # let any in-flight LoRa broadcast finish
         pre_count = len(latency.get_mesh_samples())
         ping_id = latency.send_mesh_ping()
         if ping_id:
@@ -289,6 +291,8 @@ def _run_full_measurement(ble_rtt_ms):
             _publish_progress("mesh", "no connection")
     except Exception:
         _publish_progress("mesh", "error")
+    finally:
+        mqtt_bridge._lora_paused = False
 
     # Final summary to M5StickC + MQTT
     parts = []

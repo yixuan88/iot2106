@@ -7,8 +7,8 @@ Wants=mosquitto.service bluetooth.service
 Type=simple
 User=__USER__
 WorkingDirectory=__PROJECT_DIR__
-# Add --zone "Zone Name" to tag messages with this gateway's location
-ExecStart=__PROJECT_DIR__/venv/bin/python3 -m gateway.main --bluetooth --mqtt --zone "__ZONE__"
+# Zone name is set in mqtt_bridge.py (_zone variable) — edit per gateway
+ExecStart=__PROJECT_DIR__/venv/bin/python3 -m gateway.main --bluetooth --mqtt
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

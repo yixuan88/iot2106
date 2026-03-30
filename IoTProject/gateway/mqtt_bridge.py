@@ -24,7 +24,7 @@ _local_users_lock = threading.Lock()
 _status_thread = None
 _gateway_id = None
 _lora_paused = False  # pause LoRa broadcasts during mesh ping
-_zone = "Foogle"  # location zone name for this gateway
+_zone = "Building A"  # location zone name for this gateway
 
 # Message delivery ACK tracking
 _pending_acks = {}        # {msg_id: timestamp_sent}

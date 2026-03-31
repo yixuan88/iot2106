@@ -368,6 +368,7 @@
     loadLocalNode();
     loadNodes();
     loadLatency();
+    loadReceivedFiles();
     measureWifiPing();
     setInterval(loadNodes, 15000);
     setInterval(loadLatency, 3000);
@@ -800,6 +801,15 @@
       tbody.appendChild(tr);
       document.getElementById('recv-table').style.display = 'table';
     }
+  }
+
+  async function loadReceivedFiles() {
+    try {
+      var r = await fetch('/api/transfer/received');
+      if (!r.ok) return;
+      var files = await r.json();
+      files.forEach(function(f) { handleFileNotify(f); });
+    } catch(e) {}
   }
 
   /* ── Nodes ── */

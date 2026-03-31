@@ -151,7 +151,8 @@ def _handle_topic_message(topic_name, payload):
     msg_id = uuid.uuid4().hex[:6]
 
     logger.info("→ LoRa [topic/%s] from %s: %r", topic_name, sender, text[:80])
-    wire = f"T|{sender}|{topic_name}|{msg_id}|{text}"
+    zone_tag = f":{_zone}" if _zone else ""
+    wire = f"T|{sender}|{topic_name}|{msg_id}{zone_tag}|{text}"
     with _pending_acks_lock:
         _pending_acks[msg_id] = time.time()
     _send_over_lora(wire)
@@ -171,7 +172,8 @@ def _handle_dm_message(recipient, payload):
 
     msg_id = uuid.uuid4().hex[:6]
     logger.info("→ LoRa [DM] %s → %s: %r", sender, recipient, text[:80])
-    wire = f"D|{sender}|{recipient}|{msg_id}|{text}"
+    zone_tag = f":{_zone}" if _zone else ""
+    wire = f"D|{sender}|{recipient}|{msg_id}{zone_tag}|{text}"
     with _pending_acks_lock:
         _pending_acks[msg_id] = time.time()
     _send_over_lora(wire)
@@ -270,12 +272,17 @@ def _route_incoming_text(raw_text, from_id, rssi, snr, hops):
     ts = time.time()
 
     if raw_text.startswith("T|") or raw_text.startswith("D|"):
-        # New format: T|sender|dest|msg_id|text  (5 fields)
-        # Old format: T|sender|dest|text          (4 fields)
+        # New format: T|sender|dest|msg_id:zone|text  (5 fields, zone optional)
+        # Old format: T|sender|dest|text              (4 fields)
         parts = raw_text.split("|", 4)
         msg_id = None
+        zone = None
         if len(parts) == 5:
-            msg_type, sender, dest, msg_id, text = parts
+            msg_type, sender, dest, msg_id_field, text = parts
+            if ":" in msg_id_field:
+                msg_id, zone = msg_id_field.split(":", 1)
+            else:
+                msg_id = msg_id_field
         elif len(parts) == 4:
             msg_type, sender, dest, text = parts
         else:
@@ -297,6 +304,8 @@ def _route_incoming_text(raw_text, from_id, rssi, snr, hops):
             "hops": hops,
             "_lora_rx": True,
         }
+        if zone:
+            payload["zone"] = zone
 
         if msg_type == "T":
             payload["to_topic"] = dest

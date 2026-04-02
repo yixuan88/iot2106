@@ -16,7 +16,7 @@ BROKER_HOST = "127.0.0.1"
 BROKER_PORT = 1883
 MAX_LORA_BYTES = 228
 GATEWAY_STATUS_INTERVAL = 5   # local MQTT publish interval (seconds)
-LORA_STATUS_INTERVAL = 60     # LoRa broadcast interval (seconds)
+LORA_STATUS_INTERVAL = 30     # LoRa broadcast interval (seconds)
 
 _client = None
 _local_users = {}
@@ -150,6 +150,11 @@ def _handle_topic_message(topic_name, payload):
     text = payload.get("text", "")
     msg_id = uuid.uuid4().hex[:6]
 
+    if sender and sender != "unknown":
+        with _local_users_lock:
+            _local_users[sender] = {"last_seen": time.time()}
+        _publish(f"mesh/presence/{sender}", {"status": "online", "username": sender, "ts": time.time()}, retain=True)
+
     logger.info("→ LoRa [topic/%s] from %s: %r", topic_name, sender, text[:80])
     zone_tag = f":{_zone}" if _zone else ""
     wire = f"T|{sender}|{topic_name}|{msg_id}{zone_tag}|{text}"
@@ -162,6 +167,11 @@ def _handle_topic_message(topic_name, payload):
 def _handle_dm_message(recipient, payload):
     sender = payload.get("from", "unknown")
     text = payload.get("text", "")
+
+    if sender and sender != "unknown":
+        with _local_users_lock:
+            _local_users[sender] = {"last_seen": time.time()}
+        _publish(f"mesh/presence/{sender}", {"status": "online", "username": sender, "ts": time.time()}, retain=True)
 
     with _local_users_lock:
         is_local = recipient in _local_users
@@ -366,8 +376,7 @@ def get_gateway_status():
 
 def _publish_gateway_status_loop():
     """Periodically publish this gateway's status to MQTT and LoRa."""
-    time.sleep(5)  # wait for services to settle
-    lora_counter = 0
+    lora_counter = LORA_STATUS_INTERVAL
     while _client is not None:
         try:
             status = get_gateway_status()

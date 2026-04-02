@@ -302,7 +302,7 @@
     <div class="section-header">Network Topology</div>
     <canvas id="topo-canvas" width="900" height="620" style="width:100%;max-width:900px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;"></canvas>
     <div id="topo-info" style="font-size:0.78rem;color:#555;margin-top:6px;">
-      <span id="topo-gw-count">0</span> gateway(s) online. Local: 5s via MQTT. Remote: 60s via LoRa (150s expiry).
+      <span id="topo-gw-count">0</span> gateway(s) online. Local: 5s via MQTT. Remote: 30s via LoRa (150s expiry).
     </div>
   </div>
 
@@ -405,7 +405,7 @@
     mqttClient.on('offline',   () => setConnStatus('err', 'offline'));
     mqttClient.on('error', function(err) { console.error(err); setConnStatus('err', 'error'); });
 
-    mqttClient.on('message', function(topic, buf) {
+    mqttClient.on('message', function(topic, buf, packet) {
       var msg;
       try { msg = JSON.parse(buf.toString()); } catch(e) { return; }
 
@@ -418,7 +418,7 @@
       } else if (topic.indexOf('mesh/file/notify/') === 0) {
         handleFileNotify(msg);
       } else if (topic.indexOf('mesh/gateway/') === 0 && topic.indexOf('/status') > 0) {
-        handleGatewayStatus(msg);
+        if (!packet.retain) handleGatewayStatus(msg);
       } else if (topic === 'mesh/latency/progress') {
         handleLatencyProgress(msg);
       } else if (topic === 'mesh/ack/sent') {
@@ -558,6 +558,7 @@
     if (isPriority) badge += '<div class="priority-label">\u26A0 EMERGENCY</div>';
     if (isDm && isMine)    badge += '<div class="badge">DM \u2192 ' + escHtml(msg.to_user || '?') + '</div>';
     if (isDm && !isMine)   badge += '<div class="badge">DM from ' + escHtml(msg.from) + '</div>';
+    if (!isDm && isMine)   badge += '<div class="badge">' + escHtml(msg.from) + '</div>';
     if (!isDm && !isMine)  badge += '<div class="badge">' + escHtml(msg.from) + '</div>';
     if (msg.zone) badge += '<div class="badge" style="background:rgba(211,47,47,.15);color:#C62828;">\u25B2 ' + escHtml(msg.zone) + '</div>';
 

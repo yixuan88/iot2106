@@ -131,7 +131,7 @@ def _create_advertisement() -> Advertisement:
     """Create a BLE advertisement with NUS service UUID and beacon data."""
     try:
         return Advertisement(
-            "GatewayBLE",
+            "GatewayBLE-1",
             [NUS_SERVICE_UUID],
             appearance=0x0000,
             timeout=0,
@@ -141,7 +141,7 @@ def _create_advertisement() -> Advertisement:
         # Fallback: library version may not support manufacturer_data
         logger.warning("BLE: manufacturer_data not supported, advertising without beacon")
         return Advertisement(
-            "GatewayBLE",
+            "GatewayBLE-1",
             [NUS_SERVICE_UUID],
             appearance=0x0000,
             timeout=0,
@@ -155,7 +155,21 @@ async def _refresh_advertisement():
         return
     try:
         if _advert is not None:
-            await _advert.unregister()
+            if hasattr(_advert, 'unregister'):
+                await _advert.unregister()
+            else:
+                # Older bluez-peripheral lacks unregister — remove via D-Bus directly
+                try:
+                    await _bus.call(Message(
+                        destination="org.bluez",
+                        interface="org.bluez.LEAdvertisingManager1",
+                        path=_adapter._proxy.path,
+                        member="UnregisterAdvertisement",
+                        signature="o",
+                        body=["/com/meshgateway/advert0"],
+                    ))
+                except Exception:
+                    pass
         _advert = _create_advertisement()
         await _advert.register(_bus, adapter=_adapter, path="/com/meshgateway/advert0")
         logger.debug("BLE beacon refreshed (clients=%d, mesh=%s)",

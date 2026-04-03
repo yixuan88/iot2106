@@ -292,6 +292,7 @@ void loop() {
         M5.Lcd.fillScreen(BLACK);
         M5.Lcd.setCursor(0, 0);
         M5.Lcd.println("Connecting...");
+        delay(500);  // let BLE controller finish scan teardown
         if (connectToGateway()) {
             isConnected = true;
             backoffMs = BACKOFF_INITIAL_MS;  // reset backoff on success

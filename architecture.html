@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IoT Mesh Gateway — System Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --lora:    #2E7D32;
+    --lora-bg: #E8F5E9;
+    --ble:     #1565C0;
+    --ble-bg:  #E3F2FD;
+    --wifi:    #E65100;
+    --wifi-bg: #FFF3E0;
+    --rpi:     #C62828;
+    --rpi-bg:  #FFEBEE;
+    --esp:     #6A1B9A;
+    --esp-bg:  #F3E5F5;
+    --gray:    #546E7A;
+    --border:  #CFD8DC;
+    --bg:      #F8FAFC;
+    --card:    #FFFFFF;
+    --text:    #1A2027;
+    --sub:     #546E7A;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  /* ── Cover ── */
+  .cover {
+    background: linear-gradient(135deg, #0D1B2A 0%, #1B3A5C 60%, #1E5799 100%);
+    color: white;
+    padding: 64px 48px 48px;
+    position: relative;
+    overflow: hidden;
+    page-break-after: always;
+  }
+  .cover::before {
+    content: '';
+    position: absolute;
+    top: -80px; right: -80px;
+    width: 400px; height: 400px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.04);
+  }
+  .cover::after {
+    content: '';
+    position: absolute;
+    bottom: -60px; left: -60px;
+    width: 300px; height: 300px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.03);
+  }
+  .cover-badge {
+    display: inline-block;
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 20px;
+    padding: 4px 16px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+  }
+  .cover h1 {
+    font-size: 38px;
+    font-weight: 700;
+    line-height: 1.15;
+    margin-bottom: 12px;
+    position: relative;
+  }
+  .cover h1 span { color: #64B5F6; }
+  .cover .sub {
+    font-size: 16px;
+    color: rgba(255,255,255,0.65);
+    margin-bottom: 40px;
+    font-weight: 300;
+  }
+  .cover-chips {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 48px;
+  }
+  .chip {
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .chip-green  { background: #1B5E20; color: #A5D6A7; }
+  .chip-blue   { background: #0D47A1; color: #90CAF9; }
+  .chip-orange { background: #BF360C; color: #FFCC80; }
+  .chip-purple { background: #4A148C; color: #CE93D8; }
+  .chip-red    { background: #B71C1C; color: #EF9A9A; }
+
+  .cover-stats {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
+    border-top: 1px solid rgba(255,255,255,0.12);
+    padding-top: 32px;
+  }
+  .stat { text-align: center; }
+  .stat-n {
+    font-size: 32px;
+    font-weight: 700;
+    color: #64B5F6;
+    line-height: 1;
+  }
+  .stat-l {
+    font-size: 10px;
+    color: rgba(255,255,255,0.55);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-top: 4px;
+  }
+
+  /* ── Page layout ── */
+  .page { max-width: 960px; margin: 0 auto; padding: 32px 32px; }
+
+  /* ── Section headers ── */
+  .section {
+    margin-bottom: 32px;
+    page-break-inside: avoid;
+  }
+  .section-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.8px;
+    color: var(--sub);
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  h2 {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: var(--text);
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
+  }
+  .card-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 12px;
+  }
+
+  /* ── Hardware table ── */
+  .hw-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+  }
+  .hw-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+  }
+  .hw-card .icon {
+    font-size: 28px;
+    margin-bottom: 8px;
+    display: block;
+  }
+  .hw-card .qty {
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .hw-card .name {
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .hw-card .detail {
+    font-size: 10px;
+    color: var(--sub);
+  }
+  .hw-lora  { border-top: 3px solid var(--lora);  }
+  .hw-rpi   { border-top: 3px solid var(--rpi);   }
+  .hw-rpi0  { border-top: 3px solid #AD1457;      }
+  .hw-m5    { border-top: 3px solid #F57F17;      }
+  .hw-phone { border-top: 3px solid var(--ble);   }
+  .hw-lora .qty  { color: var(--lora);  }
+  .hw-rpi .qty   { color: var(--rpi);   }
+  .hw-rpi0 .qty  { color: #AD1457;      }
+  .hw-m5 .qty    { color: #F57F17;      }
+  .hw-phone .qty { color: var(--ble);   }
+
+  /* ── Zone grid ── */
+  .zone-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .zone-card {
+    border-radius: 10px;
+    border: 1.5px solid var(--border);
+    overflow: hidden;
+    background: var(--card);
+  }
+  .zone-header {
+    padding: 10px 16px;
+    font-weight: 700;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .zone-body { padding: 14px 16px; }
+  .zone-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+  .zone-row:last-child { margin-bottom: 0; }
+  .tag {
+    display: inline-block;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .tag-lora   { background: var(--lora-bg);  color: var(--lora);  }
+  .tag-ble    { background: var(--ble-bg);   color: var(--ble);   }
+  .tag-wifi   { background: var(--wifi-bg);  color: var(--wifi);  }
+  .tag-serial { background: var(--esp-bg);   color: var(--esp);   }
+  .tag-mqtt   { background: #FCE4EC;         color: #880E4F;      }
+  .tag-rpi    { background: var(--rpi-bg);   color: var(--rpi);   }
+  .zone-a { border-top: 3px solid #1565C0; }
+  .zone-a .zone-header { background: #E3F2FD; color: #1565C0; }
+  .zone-b { border-top: 3px solid #2E7D32; }
+  .zone-b .zone-header { background: #E8F5E9; color: #2E7D32; }
+  .zone-c { border-top: 3px solid #E65100; }
+  .zone-c .zone-header { background: #FFF3E0; color: #E65100; }
+  .zone-d { border-top: 3px solid #6A1B9A; }
+  .zone-d .zone-header { background: #F3E5F5; color: #6A1B9A; }
+
+  .badge-local {
+    background: #1565C0;
+    color: white;
+    border-radius: 20px;
+    padding: 2px 10px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .badge-remote {
+    background: #e0e0e0;
+    color: #555;
+    border-radius: 20px;
+    padding: 2px 10px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  /* ── Flow diagrams ── */
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-wrap: wrap;
+    margin: 12px 0;
+  }
+  .flow-node {
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 11.5px;
+    font-weight: 600;
+    text-align: center;
+    min-width: 90px;
+  }
+  .flow-arrow {
+    font-size: 18px;
+    color: var(--border);
+    padding: 0 4px;
+    font-weight: 300;
+    flex-shrink: 0;
+  }
+  .flow-label {
+    font-size: 9.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: block;
+    margin-top: 2px;
+    opacity: 0.75;
+  }
+  .fn-m5     { background: #FFF8E1; color: #E65100; border: 1.5px solid #FFB300; }
+  .fn-rpi    { background: var(--rpi-bg); color: var(--rpi); border: 1.5px solid #EF9A9A; }
+  .fn-esp    { background: var(--esp-bg); color: var(--esp); border: 1.5px solid #CE93D8; }
+  .fn-lora   { background: var(--lora-bg); color: var(--lora); border: 1.5px solid #A5D6A7; }
+  .fn-mqtt   { background: #FCE4EC; color: #880E4F; border: 1.5px solid #F48FB1; }
+  .fn-wifi   { background: var(--wifi-bg); color: var(--wifi); border: 1.5px solid #FFCC80; }
+  .fn-iphone { background: #E3F2FD; color: #1565C0; border: 1.5px solid #90CAF9; }
+
+  /* ── Wire format table ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  thead tr { background: #ECEFF1; }
+  th {
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--sub);
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 9px 12px;
+    border-bottom: 1px solid #F0F4F7;
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #F8FAFC; }
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    background: #F0F4F7;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+    color: #C62828;
+  }
+
+  /* ── MQTT topic tree ── */
+  .topic-tree {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    line-height: 2;
+    background: #0D1B2A;
+    color: #A5D6A7;
+    border-radius: 10px;
+    padding: 20px 24px;
+  }
+  .tt-root { color: #64B5F6; font-weight: 700; }
+  .tt-path { color: #FFD54F; }
+  .tt-arrow { color: #546E7A; }
+  .tt-desc { color: #78909C; font-family: 'Inter', sans-serif; font-size: 11px; margin-left: 12px; }
+
+  /* ── Latency chain ── */
+  .latency-steps {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+  }
+  .lat-step {
+    flex: 1;
+    border-radius: 8px;
+    padding: 14px 12px;
+    text-align: center;
+    border: 1.5px solid;
+  }
+  .lat-step .step-n {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .lat-step .step-name {
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .lat-step .step-desc {
+    font-size: 10px;
+    opacity: 0.75;
+    line-height: 1.4;
+  }
+  .lat-ble   { background: var(--ble-bg);  border-color: #90CAF9; color: var(--ble);  }
+  .lat-ser   { background: var(--esp-bg);  border-color: #CE93D8; color: var(--esp);  }
+  .lat-mesh  { background: var(--lora-bg); border-color: #A5D6A7; color: var(--lora); }
+  .lat-lora  { background: #E8EAF6;        border-color: #9FA8DA; color: #283593;     }
+  .lat-wifi  { background: var(--wifi-bg); border-color: #FFCC80; color: var(--wifi); }
+
+  /* ── Protocol pill row ── */
+  .proto-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+  }
+  .proto-pill {
+    border-radius: 8px;
+    padding: 14px;
+    text-align: center;
+  }
+  .proto-pill .proto-name {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .proto-pill .proto-detail {
+    font-size: 10px;
+    opacity: 0.8;
+    line-height: 1.4;
+  }
+  .pp-lora  { background: var(--lora-bg);  color: var(--lora);  border: 1px solid #A5D6A7; }
+  .pp-ble   { background: var(--ble-bg);   color: var(--ble);   border: 1px solid #90CAF9; }
+  .pp-mqtt  { background: #FCE4EC;         color: #880E4F;      border: 1px solid #F48FB1; }
+  .pp-http  { background: var(--wifi-bg);  color: var(--wifi);  border: 1px solid #FFCC80; }
+  .pp-ser   { background: var(--esp-bg);   color: var(--esp);   border: 1px solid #CE93D8; }
+
+  /* ── Degradation table ── */
+  .deg-table td:first-child { font-weight: 600; color: #C62828; }
+  .deg-table td:last-child { color: var(--gray); }
+
+  /* ── Print ── */
+  @media print {
+    body { background: white; font-size: 11px; }
+    .cover { padding: 48px 40px 36px; }
+    .page { padding: 24px 28px; max-width: 100%; }
+    .section { page-break-inside: avoid; }
+    .zone-grid { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════════════ COVER ════════════════ -->
+<div class="cover">
+  <div class="cover-badge">IoT2106 · System Architecture</div>
+  <h1>Resilient <span>Disaster Communication</span><br>Mesh Gateway Network</h1>
+  <p class="sub">ESP32 LoRa · Raspberry Pi Gateways · BLE · WiFi/MQTT · Meshtastic</p>
+
+  <div class="cover-chips">
+    <span class="chip chip-green">LoRa 915 MHz Mesh</span>
+    <span class="chip chip-blue">BLE NUS (Nordic UART)</span>
+    <span class="chip chip-orange">WiFi AP + MQTT</span>
+    <span class="chip chip-purple">Meshtastic Protocol</span>
+    <span class="chip chip-red">Raspberry Pi Gateway</span>
+  </div>
+
+  <div class="cover-stats">
+    <div class="stat"><div class="stat-n">4</div><div class="stat-l">ESP32<br>LoRa32 Nodes</div></div>
+    <div class="stat"><div class="stat-n">4</div><div class="stat-l">RPi<br>Gateways</div></div>
+    <div class="stat"><div class="stat-n">4</div><div class="stat-l">M5StickC<br>Field Units</div></div>
+    <div class="stat"><div class="stat-n">5</div><div class="stat-l">Latency<br>Hops Measured</div></div>
+    <div class="stat"><div class="stat-n">228</div><div class="stat-l">Byte LoRa<br>Packet Limit</div></div>
+  </div>
+</div>
+
+<!-- ════════════════ BODY ════════════════ -->
+<div class="page">
+
+  <!-- Hardware -->
+  <div class="section">
+    <div class="section-title">01 &nbsp; Hardware Inventory</div>
+    <div class="hw-grid">
+      <div class="hw-card hw-lora">
+        <span class="icon">📡</span>
+        <div class="qty">4</div>
+        <div class="name">LILYGO T3 LoRa32</div>
+        <div class="detail">V1.6.1 · ESP32 · 915 MHz<br>Meshtastic firmware</div>
+      </div>
+      <div class="hw-card hw-rpi">
+        <span class="icon">🖥️</span>
+        <div class="qty">3</div>
+        <div class="name">Raspberry Pi 3/4</div>
+        <div class="detail">Zones A, B, C<br>Gateway node</div>
+      </div>
+      <div class="hw-card hw-rpi0">
+        <span class="icon">🖥️</span>
+        <div class="qty">1</div>
+        <div class="name">RPi Zero 2 W</div>
+        <div class="detail">Zone D · Same software<br>Lower power draw</div>
+      </div>
+      <div class="hw-card hw-m5">
+        <span class="icon">📟</span>
+        <div class="qty">4</div>
+        <div class="name">M5StickC Plus</div>
+        <div class="detail">BLE field units<br>Arduino / ESP32</div>
+      </div>
+      <div class="hw-card hw-phone">
+        <span class="icon">📱</span>
+        <div class="qty">n</div>
+        <div class="name">iPhone / Laptop</div>
+        <div class="detail">WiFi web UI<br>Bluefruit BLE app</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Zones -->
+  <div class="section">
+    <div class="section-title">02 &nbsp; Gateway Zones (4 Deployments)</div>
+    <div class="zone-grid">
+
+      <div class="zone-card zone-a">
+        <div class="zone-header">
+          Zone A — Building A
+          <span class="badge-local">RPi 3/4</span>
+        </div>
+        <div class="zone-body">
+          <div class="zone-row"><span class="tag tag-rpi">Gateway</span> GatewayBLE-1 · 192.168.4.1</div>
+          <div class="zone-row"><span class="tag tag-serial">ESP32</span> T3 LoRa32 V1.6.1 · USB Serial</div>
+          <div class="zone-row"><span class="tag tag-ble">BLE</span> NUS peripheral · M5StickC #1 &amp; #2</div>
+          <div class="zone-row"><span class="tag tag-wifi">WiFi AP</span> MeshGateway-A · Port 5000 / 9001</div>
+          <div class="zone-row"><span class="tag tag-mqtt">MQTT</span> Mosquitto 1883 + WebSocket 9001</div>
+        </div>
+      </div>
+
+      <div class="zone-card zone-b">
+        <div class="zone-header">
+          Zone B — Building B
+          <span class="badge-remote">RPi 3/4</span>
+        </div>
+        <div class="zone-body">
+          <div class="zone-row"><span class="tag tag-rpi">Gateway</span> GatewayBLE-2 · 192.168.4.1</div>
+          <div class="zone-row"><span class="tag tag-serial">ESP32</span> T3 LoRa32 V1.6.1 · USB Serial</div>
+          <div class="zone-row"><span class="tag tag-ble">BLE</span> NUS peripheral · M5StickC #3</div>
+          <div class="zone-row"><span class="tag tag-wifi">WiFi AP</span> MeshGateway-B · Port 5000 / 9001</div>
+          <div class="zone-row"><span class="tag tag-mqtt">MQTT</span> Mosquitto 1883 + WebSocket 9001</div>
+        </div>
+      </div>
+
+      <div class="zone-card zone-c">
+        <div class="zone-header">
+          Zone C — Building C
+          <span class="badge-remote">RPi 3/4</span>
+        </div>
+        <div class="zone-body">
+          <div class="zone-row"><span class="tag tag-rpi">Gateway</span> GatewayBLE-3 · 192.168.4.1</div>
+          <div class="zone-row"><span class="tag tag-serial">ESP32</span> T3 LoRa32 V1.6.1 · USB Serial</div>
+          <div class="zone-row"><span class="tag tag-ble">BLE</span> NUS peripheral · M5StickC #4</div>
+          <div class="zone-row"><span class="tag tag-wifi">WiFi AP</span> MeshGateway-C · Port 5000 / 9001</div>
+          <div class="zone-row"><span class="tag tag-mqtt">MQTT</span> Mosquitto 1883 + WebSocket 9001</div>
+        </div>
+      </div>
+
+      <div class="zone-card zone-d">
+        <div class="zone-header">
+          Zone D — Building D
+          <span class="badge-remote">RPi Zero 2W</span>
+        </div>
+        <div class="zone-body">
+          <div class="zone-row"><span class="tag tag-rpi">Gateway</span> GatewayBLE-4 · 192.168.4.1</div>
+          <div class="zone-row"><span class="tag tag-serial">ESP32</span> T3 LoRa32 V1.6.1 · USB Serial</div>
+          <div class="zone-row"><span class="tag tag-ble">BLE</span> NUS peripheral · remote clients</div>
+          <div class="zone-row"><span class="tag tag-wifi">WiFi AP</span> MeshGateway-D · Port 5000 / 9001</div>
+          <div class="zone-row"><span class="tag tag-mqtt">MQTT</span> Mosquitto 1883 + WebSocket 9001</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Data Flows -->
+  <div class="section">
+    <div class="section-title">03 &nbsp; Cross-Protocol Data Flows</div>
+
+    <div class="card" style="margin-bottom:12px;">
+      <div class="card-title" style="color:#1565C0;">Path 1 — BLE Field Unit → LoRa Mesh → WiFi Browser</div>
+      <div class="flow">
+        <div class="flow-node fn-m5">M5StickC<span class="flow-label">Field unit</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-rpi">bt_server<span class="flow-label">BLE NUS write</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-esp">ESP32 #1<span class="flow-label">USB Serial</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-lora">LoRa Mesh<span class="flow-label">915 MHz</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-esp">ESP32 #2<span class="flow-label">USB Serial</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-mqtt">mqtt_bridge<span class="flow-label">MQTT publish</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-wifi">Browser<span class="flow-label">WebSocket</span></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px;">
+      <div class="card-title" style="color:#2E7D32;">Path 2 — WiFi Browser → LoRa Mesh → BLE Field Unit</div>
+      <div class="flow">
+        <div class="flow-node fn-wifi">Browser<span class="flow-label">MQTT publish</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-mqtt">mqtt_bridge<span class="flow-label">mesh/topic/+</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-esp">ESP32 #1<span class="flow-label">USB Serial</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-lora">LoRa Mesh<span class="flow-label">T|sender|topic|id:zone|text</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-esp">ESP32 #2<span class="flow-label">USB Serial</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-rpi">bt_server<span class="flow-label">BLE notify</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-m5">M5StickC<span class="flow-label">Display</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="color:#880E4F;">Path 3 — iPhone Dual-Protocol (BLE + WiFi simultaneously)</div>
+      <div class="flow">
+        <div class="flow-node fn-iphone">iPhone<span class="flow-label">Bluefruit app</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-rpi">bt_server<span class="flow-label">BLE NUS</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-mqtt">mqtt_bridge<span class="flow-label">on_text_fn</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node fn-lora">LoRa Mesh<span class="flow-label">LoRa TX</span></div>
+      </div>
+      <div style="font-size:11px; color:var(--sub); margin-top:10px; padding-left:4px;">
+        iPhone also connects via WiFi to port 5000 web UI — both protocols active simultaneously for the demo.
+      </div>
+    </div>
+  </div>
+
+  <!-- Latency -->
+  <div class="section">
+    <div class="section-title">04 &nbsp; Latency Measurement Chain</div>
+    <p style="font-size:12px; color:var(--sub); margin-bottom:14px;">
+      Triggered by M5StickC long-press A. Each hop is measured independently; LoRa RTT is derived mathematically.
+    </p>
+    <div class="latency-steps">
+      <div class="lat-step lat-ble">
+        <div class="step-n">①</div>
+        <div class="step-name">BLE RTT</div>
+        <div class="step-desc">M5StickC sends PING, Pi echoes PONG, M5 computes RTT → sends BLRTT:&lt;ms&gt;</div>
+      </div>
+      <div class="lat-step lat-ser">
+        <div class="step-n">②</div>
+        <div class="step-name">Serial RTT</div>
+        <div class="step-desc">Admin metadata request to local ESP32 over USB — pure serial, no radio</div>
+      </div>
+      <div class="lat-step lat-mesh">
+        <div class="step-n">③</div>
+        <div class="step-name">Mesh RTT</div>
+        <div class="step-desc">MESHPING over LoRa, remote gateway echoes MESHPONG. 20s timeout + retry at 10s</div>
+      </div>
+      <div class="lat-step lat-lora">
+        <div class="step-n">④</div>
+        <div class="step-name">LoRa RTT</div>
+        <div class="step-desc">Derived: mesh_rtt − 2 × avg_serial_rtt (removes USB overhead from both ends)</div>
+      </div>
+      <div class="lat-step lat-wifi">
+        <div class="step-n">⑤</div>
+        <div class="step-name">WiFi RTT</div>
+        <div class="step-desc">Browser GET /api/ping — measured client-side, includes HTTP round-trip</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px; background:#F8FAFC;">
+      <div style="font-size:11.5px; color:var(--sub);">
+        <strong style="color:var(--text);">Path comparison shown in web UI:</strong>
+        &nbsp;&nbsp;WiFi path = WiFi RTT + Serial RTT + LoRa RTT + Serial RTT
+        &nbsp;&nbsp;|&nbsp;&nbsp;BLE path = BLE RTT + Serial RTT + LoRa RTT + Serial RTT
+      </div>
+    </div>
+  </div>
+
+  <!-- Wire Format -->
+  <div class="section">
+    <div class="section-title">05 &nbsp; LoRa Wire Format (228-byte limit)</div>
+    <div class="card" style="padding:0; overflow:hidden;">
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Format</th>
+            <th>Example</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="tag tag-lora">Topic</span></td>
+            <td><code>T|sender|topic|id:zone|text</code></td>
+            <td><code>T|alice|general|a1b2:Zone A|Hello</code></td>
+            <td>Zone embedded in msg_id field</td>
+          </tr>
+          <tr>
+            <td><span class="tag tag-lora">DM</span></td>
+            <td><code>D|sender|recipient|id:zone|text</code></td>
+            <td><code>D|alice|bob|d4e5:Zone A|Hi Bob</code></td>
+            <td>Direct message, routed to recipient</td>
+          </tr>
+          <tr>
+            <td><span class="tag tag-ble">ACK</span></td>
+            <td><code>A|msg_id</code></td>
+            <td><code>A|a1b2</code></td>
+            <td>Delivery confirmation, 120s expiry</td>
+          </tr>
+          <tr>
+            <td><span class="tag tag-wifi">Status</span></td>
+            <td><code>G|{compact_json}</code></td>
+            <td><code>G|{"id":"rpi1","bl":2,"zn":"Zone A",...}</code></td>
+            <td>Every 60s, paused during mesh ping</td>
+          </tr>
+          <tr>
+            <td><span class="tag tag-serial">Latency</span></td>
+            <td><code>MESHPING:id:ts</code></td>
+            <td><code>MESHPONG:abc:1711234567.89</code></td>
+            <td>Echo-based mesh RTT measurement</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- MQTT Topics -->
+  <div class="section">
+    <div class="section-title">06 &nbsp; MQTT Topic Map</div>
+    <div class="topic-tree">
+<span class="tt-root">mesh/</span>
+├── <span class="tt-path">topic/&lt;name&gt;</span>       <span class="tt-arrow">→</span>  <span class="tt-desc">Group chat · bidirectional WiFi ↔ LoRa · {v, from, text, zone, rssi, snr, hops}</span>
+├── <span class="tt-path">dm/&lt;username&gt;</span>      <span class="tt-arrow">→</span>  <span class="tt-desc">Direct message · routed via LoRa if recipient not local · {v, from, to_user, text}</span>
+├── <span class="tt-path">presence/&lt;user&gt;</span>    <span class="tt-arrow">→</span>  <span class="tt-desc">Online / offline · retained · {status, username, ts}</span>
+├── <span class="tt-path">file/notify/&lt;id&gt;</span>  <span class="tt-arrow">→</span>  <span class="tt-desc">File transfer complete · retained · {transfer_id, filename, size, from}</span>
+├── <span class="tt-path">gateway/&lt;id&gt;/status</span><span class="tt-arrow">→</span>  <span class="tt-desc">Heartbeat every 5s · retained · {online, ble{}, mesh{}, wifi_users, zone}</span>
+├── <span class="tt-path">latency/progress</span>    <span class="tt-arrow">→</span>  <span class="tt-desc">Step-by-step measurement updates · {step, status, value, results{}}</span>
+├── <span class="tt-path">ack/sent</span>            <span class="tt-arrow">→</span>  <span class="tt-desc">msg_id assigned, sent over LoRa · {msg_id, from, ts}</span>
+└── <span class="tt-path">ack/delivered</span>       <span class="tt-arrow">→</span>  <span class="tt-desc">ACK received from remote gateway · {msg_id, ts}</span>
+    </div>
+  </div>
+
+  <!-- Protocols -->
+  <div class="section">
+    <div class="section-title">07 &nbsp; Communication Protocols</div>
+    <div class="proto-row">
+      <div class="proto-pill pp-lora">
+        <div class="proto-name">LoRa</div>
+        <div class="proto-detail">915 MHz · Meshtastic<br>~1km+ range<br>228 byte packets<br>Multi-hop mesh</div>
+      </div>
+      <div class="proto-pill pp-ble">
+        <div class="proto-name">BLE NUS</div>
+        <div class="proto-detail">Nordic UART Service<br>Beacon + GATT<br>Company ID 0xFFFF<br>Reconnect tracking</div>
+      </div>
+      <div class="proto-pill pp-mqtt">
+        <div class="proto-name">MQTT</div>
+        <div class="proto-detail">paho-mqtt bridge<br>Port 1883 local<br>Port 9001 WebSocket<br>QoS 0, retained</div>
+      </div>
+      <div class="proto-pill pp-http">
+        <div class="proto-name">HTTP REST</div>
+        <div class="proto-detail">Flask port 5000<br>JSON payloads<br>File upload/download<br>Latency endpoints</div>
+      </div>
+      <div class="proto-pill pp-ser">
+        <div class="proto-name">USB Serial</div>
+        <div class="proto-detail">Meshtastic protocol<br>RPi ↔ ESP32<br>Serial RTT measured<br>Auto-detect device</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ports & Addresses -->
+  <div class="section">
+    <div class="section-title">08 &nbsp; Ports &amp; Network Addresses</div>
+    <div class="card" style="padding:0; overflow:hidden;">
+      <table>
+        <thead>
+          <tr><th>Service</th><th>Address / Port</th><th>Protocol</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Web UI + REST API</td><td><code>192.168.4.1:5000</code></td><td>HTTP</td><td>Dashboard, file transfer, latency endpoints</td></tr>
+          <tr><td>MQTT Broker (local)</td><td><code>127.0.0.1:1883</code></td><td>TCP</td><td>Gateway internal pub/sub</td></tr>
+          <tr><td>MQTT Broker (browsers)</td><td><code>192.168.4.1:9001</code></td><td>WebSocket</td><td>Browser MQTT.js client</td></tr>
+          <tr><td>WiFi Access Point</td><td><code>192.168.4.1/24</code></td><td>802.11n</td><td>Local network for end devices</td></tr>
+          <tr><td>DHCP Range</td><td><code>192.168.4.2 – .20</code></td><td>DHCP</td><td>Assigned to connecting clients</td></tr>
+          <tr><td>BLE NUS Service</td><td><code>6e400001-b5a3-...</code></td><td>BLE GATT</td><td>M5StickC / iPhone UART over BLE</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Graceful Degradation -->
+  <div class="section">
+    <div class="section-title">09 &nbsp; Graceful Degradation &amp; Resilience</div>
+    <div class="card" style="padding:0; overflow:hidden;">
+      <table class="deg-table">
+        <thead>
+          <tr><th>Failure Condition</th><th>System Behaviour</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>No LoRa32 connected</td>
+            <td>Gateway starts normally; BLE and WiFi/MQTT still work for local communication</td>
+          </tr>
+          <tr>
+            <td>Remote gateway offline</td>
+            <td>LWT marks it offline instantly; topology removes it after 150s of no status</td>
+          </tr>
+          <tr>
+            <td>LoRa channel congestion</td>
+            <td><code>_lora_paused</code> flag suppresses 60s status broadcasts during mesh ping measurements</td>
+          </tr>
+          <tr>
+            <td>Message not ACK'd</td>
+            <td>Pending ACKs expire after 120s; pruned every 5s in the status loop</td>
+          </tr>
+          <tr>
+            <td>File transfer chunk loss</td>
+            <td>Per-chunk CRC32 validation; META_SEQ packet carries filename + sender; max 50 KB</td>
+          </tr>
+          <tr>
+            <td>BLE client disconnects</td>
+            <td>Reconnection count and average time-to-reconnect tracked and shown in web UI</td>
+          </tr>
+          <tr>
+            <td>MQTT broker disconnect</td>
+            <td>Last Will &amp; Testament marks gateway offline; paho-mqtt auto-reconnects</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="text-align:center; color:var(--sub); font-size:10.5px; padding:24px 0 8px; border-top:1px solid var(--border); margin-top:8px;">
+    IoT2106 · Mesh Gateway Architecture · Branch: feat--bluetooth &nbsp;|&nbsp; 4 Zones · 4 ESP32 · 4 RPi · 4 M5StickC
+  </div>
+
+</div>
+</body>
+</html>

@@ -133,7 +133,7 @@ def _create_advertisement() -> Advertisement:
         # No service UUID in advert — beacon + name must fit in 31-byte PDU.
         # M5StickC discovers by beacon; service discovery happens after connect.
         return Advertisement(
-            "GatewayBLE-1",
+            "GatewayBLE",
             [],
             appearance=0x0000,
             timeout=0,
@@ -143,7 +143,7 @@ def _create_advertisement() -> Advertisement:
         # Fallback: keep service UUID for phone apps that filter by NUS UUID
         logger.warning("BLE: manufacturerData not supported, advertising without beacon")
         return Advertisement(
-            "GatewayBLE-1",
+            "GatewayBLE",
             [NUS_SERVICE_UUID],
             appearance=0x0000,
             timeout=0,

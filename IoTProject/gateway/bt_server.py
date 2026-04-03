@@ -135,7 +135,7 @@ def _create_advertisement() -> Advertisement:
             [NUS_SERVICE_UUID],
             appearance=0x0000,
             timeout=0,
-            manufacturer_data={BEACON_COMPANY_ID: _build_beacon_data()},
+            manufacturerData={BEACON_COMPANY_ID: _build_beacon_data()},
         )
     except TypeError:
         # Fallback: library version may not support manufacturer_data

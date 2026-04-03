@@ -130,16 +130,18 @@ def _build_beacon_data() -> bytes:
 def _create_advertisement() -> Advertisement:
     """Create a BLE advertisement with NUS service UUID and beacon data."""
     try:
+        # No service UUID in advert — beacon + name must fit in 31-byte PDU.
+        # M5StickC discovers by beacon; service discovery happens after connect.
         return Advertisement(
             "GatewayBLE-1",
-            [NUS_SERVICE_UUID],
+            [],
             appearance=0x0000,
             timeout=0,
             manufacturerData={BEACON_COMPANY_ID: _build_beacon_data()},
         )
     except TypeError:
-        # Fallback: library version may not support manufacturer_data
-        logger.warning("BLE: manufacturer_data not supported, advertising without beacon")
+        # Fallback: keep service UUID for phone apps that filter by NUS UUID
+        logger.warning("BLE: manufacturerData not supported, advertising without beacon")
         return Advertisement(
             "GatewayBLE-1",
             [NUS_SERVICE_UUID],

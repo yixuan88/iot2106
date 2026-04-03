@@ -71,7 +71,8 @@ const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 static BLEClient*               pClient   = nullptr;
 static BLERemoteCharacteristic* pRxChar   = nullptr;  // M5Stick writes → Pi
 static BLERemoteCharacteristic* pTxChar   = nullptr;  // Pi notifies → M5Stick
-static BLEAdvertisedDevice*     targetDev = nullptr;
+static BLEAdvertisedDevice*     targetDev  = nullptr;
+static BLEAdvertisedDevice*     fallbackDev = nullptr;  // gateway with clients (backup)
 
 static bool doConnect   = false;
 static bool isConnected = false;
@@ -216,20 +217,28 @@ static bool parseBeacon(BLEAdvertisedDevice& dev) {
 // Called once per advertisement during a BLE scan
 class ScanCallbacks : public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice dev) override {
-        // Prefer beacon-based discovery
+        // Prefer beacon-based discovery — prefer gateways with no clients
         if (parseBeacon(dev)) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "Found GW:%04X c:%d r:%d",
+                     gatewayId, gwClients, dev.getRSSI());
+            pushLine(buf);
+            if (gwClients > 0) {
+                if (fallbackDev) delete fallbackDev;
+                fallbackDev = new BLEAdvertisedDevice(dev);
+                return;
+            }
             BLEDevice::getScan()->stop();
-            if (targetDev) delete targetDev;  // fix memory leak
+            if (targetDev) delete targetDev;
             targetDev = new BLEAdvertisedDevice(dev);
             doConnect = true;
             return;
         }
         // Fallback: match by name
         if (dev.haveName() && dev.getName() == GATEWAY_BLE_NAME) {
-            BLEDevice::getScan()->stop();
-            if (targetDev) delete targetDev;  // fix memory leak
-            targetDev = new BLEAdvertisedDevice(dev);
-            doConnect = true;
+            pushLine("Found " + String(GATEWAY_BLE_NAME));
+            if (fallbackDev) delete fallbackDev;
+            fallbackDev = new BLEAdvertisedDevice(dev);
         }
     }
 };
@@ -277,8 +286,8 @@ void setup() {
     M5.Lcd.setTextColor(WHITE, BLACK);
     M5.Lcd.setTextSize(1);
     M5.Lcd.setCursor(0, 0);
-    M5.Lcd.println("Scanning for:");
-    M5.Lcd.println(GATEWAY_BLE_NAME);
+    M5.Lcd.println("Scanning for nearby");
+    M5.Lcd.println("gateways...");
 
     startScan();
 }
@@ -322,6 +331,21 @@ void loop() {
         return;
     }
 
+    // ── Scan finished without finding a free gateway — use fallback ──────
+    if (!isConnected && !doConnect) {
+        BLEScan* pScan = BLEDevice::getScan();
+        if (!pScan->isScanning() && fallbackDev != nullptr) {
+            if (targetDev) delete targetDev;
+            targetDev = fallbackDev;
+            fallbackDev = nullptr;
+            doConnect = true;
+            return;
+        }
+        if (!pScan->isScanning()) {
+            startScan();  // no gateway found at all, rescan
+        }
+        return;
+    }
     if (!isConnected) return;
 
     // ── Send deferred RTT report (set by notifyCallback) ──────────────────

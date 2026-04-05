@@ -60,6 +60,7 @@ def main():  # wires up all components and starts the flask web server
     ft = FileTransfer(
         send_chunk_fn=mesh_interface.send_chunk,
         on_complete_fn=mqtt_bridge.publish_file_notification if args.mqtt else None,
+        storage_dir="/home/yixuan/IoTProject/received_files",
     )
 
     def on_packet(packet):  # routes incoming mesh packets to the message store or file transfer handler
@@ -132,6 +133,8 @@ def main():  # wires up all components and starts the flask web server
 
     if args.zone:
         mqtt_bridge.set_zone(args.zone)
+
+    mqtt_bridge.set_file_transfer(ft)
 
     if args.mqtt:
         mqtt_bridge.start()

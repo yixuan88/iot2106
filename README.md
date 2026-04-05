@@ -1,4 +1,4 @@
-# IoT2106 Mesh Gateway — Setup & Run Instructions
+# IoT2106 Group 14 Mesh Gateway — Setup & Run Instructions
 
 ## Hardware Required
 

@@ -19,6 +19,7 @@ GATEWAY_STATUS_INTERVAL = 5   # local MQTT publish interval (seconds)
 LORA_STATUS_INTERVAL = 30     # LoRa broadcast interval (seconds)
 
 _client = None
+_file_transfer = None
 _local_users = {}
 _local_users_lock = threading.Lock()
 _status_thread = None
@@ -30,6 +31,7 @@ _zone = "Building 2"  # location zone name for this gateway
 _pending_acks = {}        # {msg_id: timestamp_sent}
 _pending_acks_lock = threading.Lock()
 _ACK_EXPIRY = 120        # seconds before giving up on an ACK
+USER_TTL = 300            # seconds of inactivity before a local user is considered offline
 
 
 def set_zone(zone_name):
@@ -37,6 +39,12 @@ def set_zone(zone_name):
     global _zone
     _zone = zone_name
     logger.info("Gateway zone set to: %s", zone_name)
+
+
+def set_file_transfer(ft):
+    """Give the bridge a reference to the FileTransfer instance for stale notification cleanup."""
+    global _file_transfer
+    _file_transfer = ft
 
 
 def start():
@@ -114,6 +122,7 @@ def _on_connect(client, userdata, flags, reason_code, properties):
         client.subscribe("mesh/dm/+")
         client.subscribe("mesh/presence/+")
         client.subscribe("mesh/gateway/+/status")
+        client.subscribe("mesh/file/notify/+")
         logger.info("MQTT bridge subscribed to mesh topics")
     else:
         logger.error("MQTT bridge connect failed, reason code: %s", reason_code)
@@ -142,7 +151,16 @@ def _on_message(client, userdata, msg):
 
     elif topic.startswith("mesh/presence/"):
         username = topic[len("mesh/presence/"):]
-        _handle_presence(username, payload)
+        _handle_presence(username, payload, is_retained=msg.retain)
+
+    elif topic.startswith("mesh/file/notify/") and msg.retain:
+        try:
+            transfer_id = int(topic[len("mesh/file/notify/"):])
+        except ValueError:
+            return
+        if _file_transfer is None or _file_transfer.get_received_data(transfer_id) is None:
+            _publish(topic, {}, retain=True)
+            logger.info("Cleared stale retained file notification for transfer %d", transfer_id)
 
 
 def _handle_topic_message(topic_name, payload):
@@ -190,12 +208,20 @@ def _handle_dm_message(recipient, payload):
     _publish("mesh/ack/sent", {"msg_id": msg_id, "from": sender, "ts": time.time()})
 
 
-def _handle_presence(username, payload):
+def _handle_presence(username, payload, is_retained=False):
     status = payload.get("status") if isinstance(payload, dict) else str(payload)
     with _local_users_lock:
         if status == "online":
-            _local_users[username] = {"last_seen": time.time()}
-            logger.debug("User online: %s", username)
+            if is_retained:
+                # Stale retained message from a previous session — clear it from the
+                # broker and do not add the user to _local_users.
+                _publish(f"mesh/presence/{username}",
+                         {"status": "offline", "username": username, "ts": time.time()},
+                         retain=True)
+                logger.info("Cleared stale retained presence for %s", username)
+            else:
+                _local_users[username] = {"last_seen": time.time()}
+                logger.debug("User online: %s", username)
         elif status == "offline":
             _local_users.pop(username, None)
             logger.debug("User offline: %s", username)
@@ -397,8 +423,20 @@ def _publish_gateway_status_loop():
             except Exception:
                 logger.debug("Could not broadcast gateway status over LoRa")
 
-        # Prune stale pending ACKs
+        # Prune users who have been inactive longer than USER_TTL
         now = time.time()
+        with _local_users_lock:
+            stale_users = [u for u, data in _local_users.items()
+                           if now - data.get("last_seen", 0) > USER_TTL]
+            for u in stale_users:
+                del _local_users[u]
+                logger.info("Pruned inactive user %s (no activity for >%ds)", u, USER_TTL)
+        for u in stale_users:
+            _publish(f"mesh/presence/{u}",
+                     {"status": "offline", "username": u, "ts": now},
+                     retain=True)
+
+        # Prune stale pending ACKs
         with _pending_acks_lock:
             expired = [k for k, v in _pending_acks.items() if now - v > _ACK_EXPIRY]
             for k in expired:

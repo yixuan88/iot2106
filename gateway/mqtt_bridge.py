@@ -32,6 +32,7 @@ _pending_acks = {}        # {msg_id: timestamp_sent}
 _pending_acks_lock = threading.Lock()
 _ACK_EXPIRY = 120        # seconds before giving up on an ACK
 USER_TTL = 300            # seconds of inactivity before a local user is considered offline
+_HIDDEN_USERS = {"BLE-device", "ble_client"}  # never shown as online in presence/topology
 
 
 def set_zone(zone_name):
@@ -168,7 +169,7 @@ def _handle_topic_message(topic_name, payload):
     text = payload.get("text", "")
     msg_id = uuid.uuid4().hex[:6]
 
-    if sender and sender != "unknown":
+    if sender and sender != "unknown" and sender not in _HIDDEN_USERS:
         with _local_users_lock:
             _local_users[sender] = {"last_seen": time.time()}
         _publish(f"mesh/presence/{sender}", {"status": "online", "username": sender, "ts": time.time()}, retain=True)
@@ -186,7 +187,7 @@ def _handle_dm_message(recipient, payload):
     sender = payload.get("from", "unknown")
     text = payload.get("text", "")
 
-    if sender and sender != "unknown":
+    if sender and sender != "unknown" and sender not in _HIDDEN_USERS:
         with _local_users_lock:
             _local_users[sender] = {"last_seen": time.time()}
         _publish(f"mesh/presence/{sender}", {"status": "online", "username": sender, "ts": time.time()}, retain=True)
@@ -376,7 +377,7 @@ def get_gateway_status():
     peers = mesh_interface.get_node_info()
     with _local_users_lock:
         # Exclude BLE-device from WiFi users — it's tracked via ble.client_count
-        wifi_users = [u for u in _local_users.keys() if u != "BLE-device"]
+        wifi_users = [u for u in _local_users.keys() if u not in ("BLE-device", "ble_client")]
     status = {
         "online": True,
         "gateway_id": _gateway_id,
@@ -452,7 +453,7 @@ def _build_compact_status():
     local_node = mesh_interface.get_local_node()
     peers = mesh_interface.get_node_info()
     with _local_users_lock:
-        wifi_users = [u for u in _local_users.keys() if u != "BLE-device"]
+        wifi_users = [u for u in _local_users.keys() if u not in ("BLE-device", "ble_client")]
     compact = {
         "id": _gateway_id,
         "bl": ble.get("client_count", 0),

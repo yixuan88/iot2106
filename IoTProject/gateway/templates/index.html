@@ -144,6 +144,12 @@
     progress::-webkit-progress-bar { background: #e0e0e0; border-radius: 5px; }
     progress::-webkit-progress-value { background: #1a73e8; border-radius: 5px; }
     #xfer-status { font-size: 0.8rem; color: #555; min-height: 1.1em; }
+    #incoming-section { margin-top: 10px; display: none; }
+    #incoming-section .incoming-label { font-size: 0.78rem; font-weight: 600; color: #555; margin-bottom: 6px; }
+    .incoming-item { background: #e8f0fe; border: 1px solid #c5d8fb; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
+    .incoming-item .inc-name { font-size: 0.82rem; font-weight: 600; }
+    .incoming-item .inc-meta { font-size: 0.75rem; color: #555; margin-bottom: 4px; }
+    .incoming-item progress { margin-top: 0; }
     table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 8px; }
     th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid #eee; }
     th { color: #666; font-weight: 600; }
@@ -292,6 +298,10 @@
       <progress id="send-progress" value="0" max="1" style="display:none;"></progress>
       <div id="xfer-status"></div>
     </form>
+    <div id="incoming-section">
+      <div class="incoming-label">Incoming</div>
+      <div id="incoming-list"></div>
+    </div>
     <table id="recv-table" style="display:none;">
       <thead><tr><th>File</th><th>From</th><th>Size</th><th></th></tr></thead>
       <tbody id="recv-body"></tbody>
@@ -367,7 +377,8 @@
     connectMqtt();
     loadLocalNode();
     loadNodes();
-    loadLatency();
+    fetch('/api/latency/clear', { method: 'POST' }).then(function() { loadLatency(); });
+
     loadReceivedFiles();
     measureWifiPing();
     setInterval(loadNodes, 15000);
@@ -786,6 +797,44 @@
       } catch(e) {}
     }, 1000);
   }
+
+  var incomingPoller = setInterval(async function() {
+    try {
+      var r = await fetch('/api/transfer/receiving');
+      if (!r.ok) return;
+      var list = await r.json();
+      var section = document.getElementById('incoming-section');
+      var container = document.getElementById('incoming-list');
+      if (list.length === 0) {
+        section.style.display = 'none';
+        container.innerHTML = '';
+        return;
+      }
+      section.style.display = 'block';
+      var seen = {};
+      list.forEach(function(t) {
+        seen[t.transfer_id] = true;
+        var el = container.querySelector('[data-tid="' + t.transfer_id + '"]');
+        if (!el) {
+          el = document.createElement('div');
+          el.className = 'incoming-item';
+          el.dataset.tid = t.transfer_id;
+          container.appendChild(el);
+        }
+        var name = t.filename || ('Transfer #' + t.transfer_id);
+        var from = t.from ? ' from ' + escHtml(t.from) : '';
+        var done = t.received_chunks;
+        var total = t.total_chunks || 1;
+        el.innerHTML =
+          '<div class="inc-name">' + escHtml(name) + '</div>' +
+          '<div class="inc-meta">' + done + ' / ' + total + ' chunks' + from + '</div>' +
+          '<progress value="' + done + '" max="' + total + '"></progress>';
+      });
+      Array.from(container.children).forEach(function(el) {
+        if (!seen[el.dataset.tid]) container.removeChild(el);
+      });
+    } catch(e) {}
+  }, 2000);
 
   function handleFileNotify(msg) {
     var id = msg.transfer_id;

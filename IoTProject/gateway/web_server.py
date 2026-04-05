@@ -79,6 +79,10 @@ def create_app(store, file_transfer):
             abort(404, "Transfer not found")
         return jsonify(progress)
 
+    @app.route("/api/transfer/receiving", methods=["GET"])
+    def transfer_receiving():  # lists all in-progress inbound file transfers with chunk counts
+        return jsonify(file_transfer.list_receiving())
+
     @app.route("/api/transfer/received", methods=["GET"])
     def transfer_received():  # lists all fully assembled inbound file transfers
         return jsonify(file_transfer.list_received())
@@ -109,6 +113,11 @@ def create_app(store, file_transfer):
     @app.route("/api/latency", methods=["GET"])
     def latency_all():
         return jsonify(latency.get_all())
+
+    @app.route("/api/latency/clear", methods=["POST"])
+    def latency_clear():
+        latency.clear()
+        return jsonify({"ok": True})
 
     @app.route("/api/latency/serial", methods=["POST"])
     def latency_serial():

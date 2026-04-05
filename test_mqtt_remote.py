@@ -8,7 +8,7 @@ Usage:
 
 Examples:
     python3 test_mqtt_remote.py 192.168.4.1
-    python3 test_mqtt_remote.py 192.168.0.4 31ac Pork
+    python3 test_mqtt_remote.py 192.168.0.4 31ac bob
 """
 
 import sys, json, time
@@ -21,7 +21,7 @@ if len(sys.argv) < 2:
 
 HOST         = sys.argv[1]
 FROM_USER    = sys.argv[2] if len(sys.argv) > 2 else "31ac"
-DM_RECIPIENT = sys.argv[3] if len(sys.argv) > 3 else "Pork"
+DM_RECIPIENT = sys.argv[3] if len(sys.argv) > 3 else "bob"
 
 PORT = 9001
 

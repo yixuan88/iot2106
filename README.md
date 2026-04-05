@@ -126,6 +126,39 @@ Verify the message appears in the web UI on Node B.
 
 Both measurements use round-trip timing (no clock sync needed).
 
+## MQTT Testing
+
+Use `test_mqtt_remote.py` (run on your Mac/laptop) to inject test messages into a running gateway over MQTT without needing a physical M5StickC.
+
+**Prerequisite:** `paho-mqtt` installed on your machine:
+```bash
+pip install paho-mqtt
+```
+
+**Usage:**
+```bash
+# Broadcast a topic message to the gateway at <host>
+python3 test_mqtt_remote.py <host>
+
+# Specify a sender name and DM recipient
+python3 test_mqtt_remote.py <host> <from_user> <dm_recipient>
+```
+
+**Examples:**
+```bash
+# Send to gateway on its AP IP (phone connected to MeshGateway WiFi)
+python3 test_mqtt_remote.py 192.168.4.1
+
+# Send as user "alice", DM to "bob"
+python3 test_mqtt_remote.py 192.168.0.4 alice bob
+```
+
+The script sends two messages:
+- A **topic message** to `mesh/topic/general` (broadcast to all subscribers)
+- A **DM** to `mesh/dm/<dm_recipient>`
+
+Both appear in the web UI in real time. The gateway must be running (`python -m gateway.main`) and Mosquitto must be active (started automatically by `autosetup.sh`). MQTT WebSocket port is **9001**.
+
 ## CLI Reference
 
 ```bash

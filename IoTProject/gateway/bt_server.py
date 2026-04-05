@@ -421,6 +421,12 @@ def get_latency_samples() -> list:
         return list(_latency_samples)
 
 
+def clear_latency_samples() -> None:
+    """Clear stored BLE latency measurements."""
+    with _latency_lock:
+        _latency_samples.clear()
+
+
 # -- Internal ------------------------------------------------------------------
 
 def _on_dbus_message(msg):

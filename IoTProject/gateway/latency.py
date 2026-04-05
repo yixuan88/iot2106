@@ -38,7 +38,7 @@ def send_mesh_ping():
     with _pending_lock:
         _pending_pings[ping_id] = ts
     try:
-        mesh_interface.send_text(f"MESHPING:{ping_id}:{ts}")
+        mesh_interface.send_text_immediate(f"MESHPING:{ping_id}:{ts}")
         logger.info("Mesh ping sent: %s", ping_id)
         return ping_id
     except RuntimeError:
@@ -57,7 +57,7 @@ def handle_mesh_text(text):
         # Remote side sent a ping — echo it back immediately
         pong = "MESHPONG:" + text[9:]
         try:
-            mesh_interface.send_text(pong)
+            mesh_interface.send_text_immediate(pong)
             logger.info("Echoed MESHPONG for %s", text[9:].split(":")[0])
         except Exception:
             logger.warning("Could not echo MESHPONG")
@@ -85,6 +85,15 @@ def handle_mesh_text(text):
 def get_mesh_samples():
     with _mesh_lock:
         return list(_mesh_samples)
+
+
+def clear():
+    """Clear all stored latency samples."""
+    with _mesh_lock:
+        _mesh_samples.clear()
+    mesh_interface.clear_serial_rtt_samples()
+    from gateway import bt_server
+    bt_server.clear_latency_samples()
 
 
 # ── Aggregation ───────────────────────────────────────────────────────────────

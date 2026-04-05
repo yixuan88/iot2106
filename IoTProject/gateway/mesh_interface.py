@@ -1,4 +1,5 @@
 import logging
+import queue
 import threading
 import time
 from pubsub import pub
@@ -13,6 +14,12 @@ _device = None
 
 MAX_CHUNK_PAYLOAD = 200
 _BLE_RECONNECT_INTERVAL = 5
+
+# LoRa send queue — rate-limits outgoing text to one packet per MIN_SEND_INTERVAL
+# so the ESP32 TX queue is never overwhelmed.
+MIN_SEND_INTERVAL = 4.0          # seconds between consecutive LoRa text sends (Long Fast / SF11 + 3-hop rebroadcast storm)
+_SEND_QUEUE_MAX = 20             # drop messages beyond this to avoid unbounded backlog
+_send_queue: queue.Queue = queue.Queue(maxsize=_SEND_QUEUE_MAX)
 
 # Serial RTT measurement
 _serial_rtt_samples: list = []
@@ -56,11 +63,22 @@ def register_receive_callback(fn):  # registers a function to call whenever a pa
     _receive_callbacks.append(fn)
 
 
-def send_text(message, destination="^all"):  # sends a plain text message over the mesh
+def send_text(message, destination="^all"):  # enqueues a text message for rate-limited LoRa transmission
     if not _interface:
         raise RuntimeError("Not connected to mesh node")
-    _interface.sendText(message, destinationId=destination)
-    logger.debug("Sent text to %s: %s", destination, message)
+    try:
+        _send_queue.put_nowait((message, destination))
+        logger.debug("Queued text to %s: %s", destination, message)
+    except queue.Full:
+        logger.warning("LoRa send queue full (%d) — dropped: %s", _SEND_QUEUE_MAX, message[:60])
+        raise RuntimeError("LoRa send queue full")
+
+
+def send_text_immediate(message, destination="^all"):  # sends a text message directly, bypassing the rate-limit queue (use only for control messages like MESHPONG)
+    if not _interface:
+        raise RuntimeError("Not connected to mesh node")
+    t = threading.Thread(target=_do_send, args=(message, destination), daemon=True)
+    t.start()
 
 
 def send_chunk(payload_bytes, destination="^all"):  # sends a raw binary file chunk using the private app port
@@ -159,6 +177,12 @@ def get_serial_rtt_samples():
         return list(_serial_rtt_samples)
 
 
+def clear_serial_rtt_samples():
+    """Clear stored serial RTT measurements."""
+    with _serial_rtt_lock:
+        _serial_rtt_samples.clear()
+
+
 def _on_receive(packet, interface):  # dispatches every incoming packet to all registered callbacks
     for cb in _receive_callbacks:
         try:
@@ -199,6 +223,34 @@ def _do_ble_reconnect():  # tears down the dropped BLE interface and opens a fre
     except Exception:
         logger.exception("BLE reconnect failed — will retry in %ds", _BLE_RECONNECT_INTERVAL)
 
+
+def _do_send(message, destination):  # runs sendText in a thread so a timeout can be applied
+    _interface.sendText(message, destinationId=destination)
+
+
+def _send_worker():  # drains the LoRa send queue with MIN_SEND_INTERVAL spacing between transmissions
+    while True:
+        message, destination = _send_queue.get()
+        try:
+            if _interface:
+                t = threading.Thread(target=_do_send, args=(message, destination), daemon=True)
+                t.start()
+                t.join(timeout=5.0)
+                if t.is_alive():
+                    logger.warning("sendText timed out (5s) — interface may be blocked: %s", message[:60])
+                else:
+                    logger.debug("Sent text to %s: %s", destination, message)
+            else:
+                logger.warning("No mesh connection — queued message dropped: %s", message[:60])
+        except Exception:
+            logger.exception("Error sending queued LoRa text")
+        finally:
+            _send_queue.task_done()
+        time.sleep(MIN_SEND_INTERVAL)
+
+
+_send_thread = threading.Thread(target=_send_worker, daemon=True)
+_send_thread.start()
 
 _ble_watchdog = threading.Thread(target=_ble_reconnect_loop, daemon=True)
 _ble_watchdog.start()

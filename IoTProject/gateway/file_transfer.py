@@ -1,3 +1,4 @@
+import json
 import logging
 import math
 import os
@@ -12,7 +13,7 @@ CHUNK_DATA_SIZE = 184
 HEADER_SIZE = 16
 CHUNK_TOTAL_SIZE = HEADER_SIZE + CHUNK_DATA_SIZE
 MAX_FILE_SIZE = 50 * 1024
-INTER_CHUNK_DELAY = 0.5
+INTER_CHUNK_DELAY = 1.5
 META_SEQ = 0xFFFFFFFF
 
 
@@ -25,7 +26,7 @@ def _unpack_header(data):
 
 
 class FileTransfer:
-    def __init__(self, send_chunk_fn, on_progress_fn=None, on_complete_fn=None):  # stores the chunk sender and sets up send/receive tracking dicts
+    def __init__(self, send_chunk_fn, on_progress_fn=None, on_complete_fn=None, storage_dir=None):  # stores the chunk sender and sets up send/receive tracking dicts
         self._send_chunk = send_chunk_fn
         self._on_progress = on_progress_fn or (lambda *a, **kw: None)
         self._on_complete = on_complete_fn or (lambda d: None)
@@ -33,6 +34,10 @@ class FileTransfer:
         self._send_progress = {}
         self._recv_buffers = {}
         self._completed = {}
+        self._storage_dir = storage_dir
+        if storage_dir:
+            os.makedirs(storage_dir, exist_ok=True)
+            self._load_from_disk()
 
     def send_file(self, file_bytes, filename, destination="^all", username="unknown"):  # validates file size, splits into chunks, and starts a background send thread
         if len(file_bytes) > MAX_FILE_SIZE:
@@ -184,14 +189,61 @@ class FileTransfer:
                 if len(self._completed) > 20:
                     oldest_key = next(iter(self._completed))
                     del self._completed[oldest_key]
+                    if self._storage_dir:
+                        for ext in (".bin", ".json"):
+                            try:
+                                os.remove(os.path.join(self._storage_dir, f"{oldest_key}{ext}"))
+                            except FileNotFoundError:
+                                pass
                 logger.info(
                     "Assembled transfer %d (%d bytes) from %s",
                     transfer_id, len(assembled), completed["from"],
                 )
+                self._save_to_disk(completed)
                 self._on_complete(completed)
                 return completed
 
         return None
+
+    def _save_to_disk(self, completed):  # persists a completed received transfer to disk so it survives restarts
+        if not self._storage_dir:
+            return
+        tid = completed["transfer_id"]
+        try:
+            data_path = os.path.join(self._storage_dir, f"{tid}.bin")
+            meta_path = os.path.join(self._storage_dir, f"{tid}.json")
+            with open(data_path, "wb") as f:
+                f.write(completed["data"])
+            meta = {k: v for k, v in completed.items() if k != "data"}
+            with open(meta_path, "w") as f:
+                json.dump(meta, f)
+            logger.debug("Saved transfer %d to disk", tid)
+        except Exception:
+            logger.exception("Failed to save transfer %d to disk", tid)
+
+    def _load_from_disk(self):  # reloads previously saved transfers into _completed on startup
+        loaded = 0
+        for fname in os.listdir(self._storage_dir):
+            if not fname.endswith(".json"):
+                continue
+            meta_path = os.path.join(self._storage_dir, fname)
+            tid_str = fname[:-5]
+            data_path = os.path.join(self._storage_dir, f"{tid_str}.bin")
+            try:
+                with open(meta_path, "r") as f:
+                    meta = json.load(f)
+                if not os.path.exists(data_path):
+                    logger.warning("Missing data file for transfer %s — skipping", tid_str)
+                    continue
+                with open(data_path, "rb") as f:
+                    data = f.read()
+                meta["data"] = data
+                self._completed[meta["transfer_id"]] = meta
+                loaded += 1
+            except Exception:
+                logger.exception("Failed to load transfer %s from disk", tid_str)
+        if loaded:
+            logger.info("Loaded %d completed transfer(s) from disk", loaded)
 
     def get_progress(self, transfer_id):  # returns the current status and chunk count for a transfer
         with self._lock:
@@ -209,6 +261,21 @@ class FileTransfer:
             if transfer_id in self._completed:
                 return dict(self._completed[transfer_id])
         return None
+
+    def list_receiving(self):  # returns in-progress inbound transfers with chunk counts
+        with self._lock:
+            result = []
+            for tid, buf in self._recv_buffers.items():
+                result.append({
+                    "transfer_id": tid,
+                    "total_chunks": buf["total_chunks"],
+                    "received_chunks": len(buf["chunks"]),
+                    "status": buf["status"],
+                    "filename": buf.get("filename", ""),
+                    "from": buf.get("from", ""),
+                    "direction": "rx",
+                })
+            return result
 
     def list_received(self):  # returns metadata for all completed inbound transfers without the raw bytes
         with self._lock:

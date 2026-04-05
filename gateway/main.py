@@ -1,6 +1,7 @@
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from gateway.message_store import MessageStore
 from gateway.file_transfer import FileTransfer
@@ -60,7 +61,7 @@ def main():  # wires up all components and starts the flask web server
     ft = FileTransfer(
         send_chunk_fn=mesh_interface.send_chunk,
         on_complete_fn=mqtt_bridge.publish_file_notification if args.mqtt else None,
-        storage_dir="/home/yixuan/IoTProject/received_files",
+        storage_dir=Path(__file__).resolve().parent.parent / "received_files",
     )
 
     def on_packet(packet):  # routes incoming mesh packets to the message store or file transfer handler
